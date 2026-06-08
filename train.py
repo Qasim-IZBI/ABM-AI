@@ -101,29 +101,56 @@ def main():
         args.load_images = True
 
     # ── Dataset ──────────────────────────────────────────────────────────────
-    img_tf  = ImageTransform(args.image_size, train=True) if args.load_images else None
-    full_ds = ABMDataset(args.data, load_images=args.load_images, image_transform=img_tf)
+    img_tf   = ImageTransform(args.image_size, train=True) if args.load_images else None
+    img_tf_v = ImageTransform(args.image_size, train=False) if args.load_images else None
 
-    n_val   = max(1, int(len(full_ds) * args.val_split))
-    n_train = len(full_ds) - n_val
-    train_ds, val_ds = random_split(full_ds, [n_train, n_val])
+    # Detect whether pipeline.py produced pre-split subdirectories
+    pre_split = os.path.isdir(os.path.join(args.data, "train"))
 
-    # Fit scalers on training split only, then save for use by evaluation.py
-    train_idx    = train_ds.indices
-    input_scaler = MinMaxScaler().fit(full_ds.raw_inputs()[train_idx])
-    full_ds.input_transform = input_scaler
+    if pre_split:
+        train_ds = ABMDataset(os.path.join(args.data, "train"),
+                              load_images=args.load_images, image_transform=img_tf)
+        val_path = os.path.join(args.data, "val")
+        val_ds   = ABMDataset(val_path, load_images=args.load_images,
+                              image_transform=img_tf_v) if os.path.isdir(val_path) else None
+        # Scalers fitted on train split only
+        input_scaler = MinMaxScaler().fit(train_ds.raw_inputs())
+        train_ds.input_transform = input_scaler
+        if val_ds:
+            val_ds.input_transform = input_scaler
+        train_loader_ds = train_ds
+        n_train = len(train_ds)
+        n_val   = len(val_ds) if val_ds else 0
+    else:
+        full_ds  = ABMDataset(args.data, load_images=args.load_images, image_transform=img_tf)
+        n_val    = max(1, int(len(full_ds) * args.val_split))
+        n_train  = len(full_ds) - n_val
+        train_split, val_split = random_split(full_ds, [n_train, n_val])
+        input_scaler = MinMaxScaler().fit(full_ds.raw_inputs()[train_split.indices])
+        full_ds.input_transform = input_scaler
+        train_ds = train_split
+        val_ds   = val_split
+        train_loader_ds = full_ds
 
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "input_scaler.pkl"), "wb") as f:
         pickle.dump(input_scaler, f)
 
     if args.model in NUMERICAL_PREDICTION_MODELS:
-        label_scaler = MinMaxScaler().fit(full_ds.raw_labels()[train_idx])
-        full_ds.label_transform = label_scaler
+        raw_labels = (train_ds.raw_labels() if pre_split
+                      else train_loader_ds.raw_labels()[train_ds.indices])
+        label_scaler = MinMaxScaler().fit(raw_labels)
+        if pre_split:
+            train_ds.label_transform = label_scaler
+            if val_ds:
+                val_ds.label_transform = label_scaler
+        else:
+            train_loader_ds.label_transform = label_scaler
         with open(os.path.join(args.out, "label_scaler.pkl"), "wb") as f:
             pickle.dump(label_scaler, f)
 
-    print(f"Train: {n_train} samples   Val: {n_val} samples")
+    print(f"Train: {n_train} samples   Val: {n_val} samples"
+          + ("  [pre-split]" if pre_split else "  [random split]"))
     print(f"Inputs : {full_ds.n_inputs}  {full_ds.input_names}")
     if args.model in IMAGE_GENERATION_MODELS:
         print(f"Output : RGB image ({args.image_size}×{args.image_size})")
@@ -132,8 +159,9 @@ def main():
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
                               shuffle=True,  num_workers=4, pin_memory=True)
-    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size,
-                              shuffle=False, num_workers=4, pin_memory=True)
+    val_loader   = (DataLoader(val_ds, batch_size=args.batch_size,
+                               shuffle=False, num_workers=4, pin_memory=True)
+                    if val_ds is not None else None)
 
     # ── Model ────────────────────────────────────────────────────────────────
     model = build_model(
@@ -160,7 +188,7 @@ def main():
     trainer = BaseTrainer(
         model=model,
         train_loader=train_loader,
-        val_loader=val_loader if args.model == "mlp" else None,
+        val_loader=val_loader if (args.model == "mlp" and val_loader is not None) else None,
         lr=args.lr,
         weight_decay=args.weight_decay,
         out_dir=args.out,

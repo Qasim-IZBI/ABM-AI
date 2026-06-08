@@ -5,17 +5,16 @@ aligned inputs/labels arrays ready for deep-learning training.
 
 Usage examples
 --------------
-# Minimal — images searched in the same folder as the text file:
-  python pipeline.py data1.txt data2.txt
+# No split — single flat output directory:
+  python pipeline.py data1.txt data2.txt --images /imgs --out /processed
 
-# Explicit image directories (searched in order):
-  python pipeline.py data1.txt data2.txt --images /img/dir1 /img/dir2
+# Deterministic train/val/test split (recommended):
+  python pipeline.py data1.txt --images /imgs --out /processed \\
+      --val_split 0.15 --test_split 0.15
 
-# Load images into a numpy array (resized to 256x256):
-  python pipeline.py data1.txt --images /imgs --load-images --size 256 256
-
-# Custom output directory:
-  python pipeline.py data1.txt --images /imgs --out /results
+# Load images into a numpy array (resized to 256×256):
+  python pipeline.py data1.txt --images /imgs --load-images --size 256 256 \\
+      --val_split 0.15 --test_split 0.15 --out /processed
 """
 
 import argparse
@@ -67,6 +66,12 @@ def parse_args():
                    help="Resize target when --load-images is set (default: 256 256)")
     p.add_argument("--out", metavar="DIR", default=".",
                    help="Output directory (default: current directory)")
+    p.add_argument("--val_split", type=float, default=0.0, metavar="FRAC",
+                   help="Fraction of data for validation, e.g. 0.15 (default: 0 = no split)")
+    p.add_argument("--test_split", type=float, default=0.0, metavar="FRAC",
+                   help="Fraction of data for test set, e.g. 0.15 (default: 0 = no split)")
+    p.add_argument("--seed", type=int, default=42,
+                   help="Random seed for reproducible splits (default: 42)")
     return p.parse_args()
 
 
@@ -93,6 +98,28 @@ def find_image(name, search_dirs):
         if os.path.isfile(candidate):
             return candidate
     return None
+
+
+def save_split(out_dir, inputs, labels, image_paths, load_images, size):
+    """Write one split (train / val / test) to its own subdirectory."""
+    os.makedirs(out_dir, exist_ok=True)
+    np.save(os.path.join(out_dir, "inputs.npy"), inputs)
+    np.save(os.path.join(out_dir, "labels.npy"), labels)
+    with open(os.path.join(out_dir, "image_paths.txt"), "w") as f:
+        f.write("\n".join(image_paths))
+
+    n = len(inputs)
+    print(f"  {os.path.basename(out_dir):<8}: {n} samples  → {out_dir}")
+
+    if load_images:
+        missing = [p for p in image_paths if p == "MISSING"]
+        if missing:
+            print(f"    [WARN] {len(missing)} images missing — skipping images.npy for this split")
+            return
+        w, h = size
+        imgs = [np.array(Image.open(p).convert("RGB").resize((w, h)), dtype=np.uint8)
+                for p in image_paths]
+        np.save(os.path.join(out_dir, "images.npy"), np.stack(imgs))
 
 
 def main():
@@ -157,37 +184,74 @@ def main():
         if len(missing) > 5:
             print(f"    ... and {len(missing) - 5} more")
 
-    # ── 5. Save outputs ────────────────────────────────────────────────────────
-    np.save(os.path.join(args.out, "inputs.npy"), inputs)
-    np.save(os.path.join(args.out, "labels.npy"), labels)
+    # ── 5. Split indices ───────────────────────────────────────────────────────
+    N = len(all_rows)
+    do_split = args.val_split > 0 or args.test_split > 0
 
-    paths_file = os.path.join(args.out, "image_paths.txt")
-    with open(paths_file, "w") as f:
-        f.write("\n".join(image_paths))
+    if do_split:
+        rng = np.random.default_rng(args.seed)
+        idx = rng.permutation(N)
 
-    print()
-    print(f"Saved inputs.npy        shape={inputs.shape}")
-    print(f"Saved labels.npy        shape={labels.shape}")
-    print(f"Saved image_paths.txt   ({len(image_paths)} entries)")
+        n_test = int(N * args.test_split)
+        n_val  = int(N * args.val_split)
+        n_train = N - n_val - n_test
 
-    # ── 6. Optionally load all images into numpy array ─────────────────────────
-    if args.load_images:
-        if missing:
-            print(f"\nWARNING: {len(missing)} images missing — "
-                  "cannot build images.npy. Fix missing paths first.")
-        else:
-            w, h = args.size
-            print(f"\nLoading {len(all_rows)} images at {w}x{h} ...", flush=True)
-            imgs = []
-            for i, p in enumerate(image_paths):
-                img = Image.open(p).convert("RGB").resize((w, h))
-                imgs.append(np.array(img, dtype=np.uint8))
-                if (i + 1) % 100 == 0:
-                    print(f"  {i + 1}/{len(image_paths)}", flush=True)
-            images = np.stack(imgs)
-            out_path = os.path.join(args.out, "images.npy")
-            np.save(out_path, images)
-            print(f"Saved images.npy        shape={images.shape}")
+        if n_train <= 0:
+            sys.exit("ERROR: val_split + test_split >= 1.0 — no training samples left.")
+
+        train_idx = idx[:n_train]
+        val_idx   = idx[n_train:n_train + n_val]
+        test_idx  = idx[n_train + n_val:]
+
+        splits = {"train": train_idx, "val": val_idx, "test": test_idx}
+        if n_val == 0:
+            splits.pop("val")
+        if n_test == 0:
+            splits.pop("test")
+
+        print()
+        print(f"Split (seed={args.seed}): "
+              f"train={n_train}  val={n_val}  test={n_test}")
+        print()
+
+        for name, sidx in splits.items():
+            save_split(
+                out_dir     = os.path.join(args.out, name),
+                inputs      = inputs[sidx],
+                labels      = labels[sidx],
+                image_paths = [image_paths[i] for i in sidx],
+                load_images = args.load_images,
+                size        = args.size,
+            )
+
+    # ── 6. No split — flat output (original behaviour) ─────────────────────────
+    else:
+        np.save(os.path.join(args.out, "inputs.npy"), inputs)
+        np.save(os.path.join(args.out, "labels.npy"), labels)
+        with open(os.path.join(args.out, "image_paths.txt"), "w") as f:
+            f.write("\n".join(image_paths))
+
+        print()
+        print(f"Saved inputs.npy        shape={inputs.shape}")
+        print(f"Saved labels.npy        shape={labels.shape}")
+        print(f"Saved image_paths.txt   ({len(image_paths)} entries)")
+
+        if args.load_images:
+            if missing:
+                print(f"\nWARNING: {len(missing)} images missing — "
+                      "cannot build images.npy.")
+            else:
+                w, h = args.size
+                print(f"\nLoading {len(all_rows)} images at {w}×{h} ...", flush=True)
+                imgs = []
+                for i, p in enumerate(image_paths):
+                    imgs.append(np.array(Image.open(p).convert("RGB").resize((w, h)),
+                                         dtype=np.uint8))
+                    if (i + 1) % 100 == 0:
+                        print(f"  {i+1}/{len(image_paths)}", flush=True)
+                images = np.stack(imgs)
+                np.save(os.path.join(args.out, "images.npy"), images)
+                print(f"Saved images.npy        shape={images.shape}")
 
 
 if __name__ == "__main__":
