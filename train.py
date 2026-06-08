@@ -20,7 +20,8 @@ Usage examples
 """
 
 import argparse
-import sys
+import os
+import pickle
 
 import numpy as np
 from torch.utils.data import DataLoader, random_split
@@ -107,15 +108,20 @@ def main():
     n_train = len(full_ds) - n_val
     train_ds, val_ds = random_split(full_ds, [n_train, n_val])
 
-    # Fit input scaler on training split only
+    # Fit scalers on training split only, then save for use by evaluation.py
     train_idx    = train_ds.indices
     input_scaler = MinMaxScaler().fit(full_ds.raw_inputs()[train_idx])
     full_ds.input_transform = input_scaler
 
-    # Label scaler for models that produce numerical outputs
+    os.makedirs(args.out, exist_ok=True)
+    with open(os.path.join(args.out, "input_scaler.pkl"), "wb") as f:
+        pickle.dump(input_scaler, f)
+
     if args.model in NUMERICAL_PREDICTION_MODELS:
         label_scaler = MinMaxScaler().fit(full_ds.raw_labels()[train_idx])
         full_ds.label_transform = label_scaler
+        with open(os.path.join(args.out, "label_scaler.pkl"), "wb") as f:
+            pickle.dump(label_scaler, f)
 
     print(f"Train: {n_train} samples   Val: {n_val} samples")
     print(f"Inputs : {full_ds.n_inputs}  {full_ds.input_names}")
