@@ -61,9 +61,12 @@ def parse_args():
                    help="Directories to search for images (searched in order)")
     p.add_argument("--load-images", action="store_true",
                    help="Load every image into memory and save images.npy")
-    p.add_argument("--size", nargs=2, type=int, default=[256, 256],
+    p.add_argument("--size", nargs=2, type=int, default=[1024, 1024],
                    metavar=("W", "H"),
-                   help="Resize target when --load-images is set (default: 256 256)")
+                   help="Target size when --load-images is set (default: 1024 1024)")
+    p.add_argument("--pad", action="store_true",
+                   help="Zero-pad images to --size instead of resizing. "
+                        "Preserves all pixel information (e.g. 1000×1000 → 1024×1024).")
     p.add_argument("--out", metavar="DIR", default=".",
                    help="Output directory (default: current directory)")
     p.add_argument("--val_split", type=float, default=0.0, metavar="FRAC",
@@ -100,7 +103,23 @@ def find_image(name, search_dirs):
     return None
 
 
-def save_split(out_dir, inputs, labels, image_paths, load_images, size):
+def load_image(path, size, pad):
+    """Load one image, either resizing or zero-padding to (size[0], size[1])."""
+    img = Image.open(path).convert("RGB")
+    w_target, h_target = size
+    if pad:
+        w, h = img.size
+        if w > w_target or h > h_target:
+            scale = min(w_target / w, h_target / h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+            w, h = img.size
+        canvas = Image.new("RGB", (w_target, h_target), (0, 0, 0))
+        canvas.paste(img, ((w_target - w) // 2, (h_target - h) // 2))
+        return canvas
+    return img.resize((w_target, h_target), Image.BILINEAR)
+
+
+def save_split(out_dir, inputs, labels, image_paths, load_images, size, pad):
     """Write one split (train / val / test) to its own subdirectory."""
     os.makedirs(out_dir, exist_ok=True)
     np.save(os.path.join(out_dir, "inputs.npy"), inputs)
@@ -116,9 +135,7 @@ def save_split(out_dir, inputs, labels, image_paths, load_images, size):
         if missing:
             print(f"    [WARN] {len(missing)} images missing — skipping images.npy for this split")
             return
-        w, h = size
-        imgs = [np.array(Image.open(p).convert("RGB").resize((w, h)), dtype=np.uint8)
-                for p in image_paths]
+        imgs = [np.array(load_image(p, size, pad), dtype=np.uint8) for p in image_paths]
         np.save(os.path.join(out_dir, "images.npy"), np.stack(imgs))
 
 
@@ -222,6 +239,7 @@ def main():
                 image_paths = [image_paths[i] for i in sidx],
                 load_images = args.load_images,
                 size        = args.size,
+                pad         = args.pad,
             )
 
     # ── 6. No split — flat output (original behaviour) ─────────────────────────
@@ -242,11 +260,11 @@ def main():
                       "cannot build images.npy.")
             else:
                 w, h = args.size
-                print(f"\nLoading {len(all_rows)} images at {w}×{h} ...", flush=True)
+                mode = "pad" if args.pad else "resize"
+                print(f"\nLoading {len(all_rows)} images at {w}×{h} ({mode}) ...", flush=True)
                 imgs = []
                 for i, p in enumerate(image_paths):
-                    imgs.append(np.array(Image.open(p).convert("RGB").resize((w, h)),
-                                         dtype=np.uint8))
+                    imgs.append(np.array(load_image(p, args.size, args.pad), dtype=np.uint8))
                     if (i + 1) % 100 == 0:
                         print(f"  {i+1}/{len(image_paths)}", flush=True)
                 images = np.stack(imgs)

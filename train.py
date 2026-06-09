@@ -45,10 +45,14 @@ def parse_args():
                         "(inputs.npy, labels.npy, image_paths.txt)")
     p.add_argument("--load_images", action="store_true",
                    help="Load images per sample. Automatically enabled for cgan.")
-    p.add_argument("--image_size", type=int, default=512,
-                   help="Resize target for images in pixels — must be a power of 2 "
-                        "(default: 512). Native images are 1000×1000; nearest "
-                        "power-of-2 options are 512 (half-res) or 1024 (full-res).")
+    p.add_argument("--image_size", type=int, default=1024,
+                   help="Target image size in pixels — must be a power of 2 "
+                        "(default: 1024). Native images are 1000×1000; use "
+                        "--pad_images to zero-pad to 1024 with no information loss.")
+    p.add_argument("--pad_images", action="store_true",
+                   help="Zero-pad images to image_size instead of resizing. "
+                        "Preserves all pixel information (12 px padding per side "
+                        "for 1000×1000 → 1024×1024).")
     p.add_argument("--val_split", type=float, default=0.15,
                    help="Fraction of data used for validation (default: 0.15)")
 
@@ -103,8 +107,8 @@ def main():
         args.load_images = True
 
     # ── Dataset ──────────────────────────────────────────────────────────────
-    img_tf   = ImageTransform(args.image_size, train=True) if args.load_images else None
-    img_tf_v = ImageTransform(args.image_size, train=False) if args.load_images else None
+    img_tf   = ImageTransform(args.image_size, train=True,  pad=args.pad_images) if args.load_images else None
+    img_tf_v = ImageTransform(args.image_size, train=False, pad=args.pad_images) if args.load_images else None
 
     # Detect whether pipeline.py produced pre-split subdirectories
     pre_split = os.path.isdir(os.path.join(args.data, "train"))

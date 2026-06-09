@@ -78,8 +78,10 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--n_images", type=int, default=8,
                    help="Number of image pairs to show in the grid (default: 8)")
-    p.add_argument("--image_size", type=int, default=512,
-                   help="Image resize target, must match training (default: 512)")
+    p.add_argument("--image_size", type=int, default=1024,
+                   help="Image size, must match training (default: 1024)")
+    p.add_argument("--pad_images", action="store_true",
+                   help="Zero-pad images to image_size instead of resizing (must match training)")
     p.add_argument("--no_plots", action="store_true",
                    help="Skip all plot/image outputs (useful on headless servers)")
     return p.parse_args()
@@ -288,7 +290,7 @@ def main():
         print("[WARN] label_scaler.pkl not found — fitting on eval data (approximate).")
 
     # ── Dataset ───────────────────────────────────────────────────────────────
-    img_tf = ImageTransform(args.image_size, train=False) if is_img else None
+    img_tf = ImageTransform(args.image_size, train=False, pad=args.pad_images) if is_img else None
     ds = ABMDataset(args.data, load_images=is_img, image_transform=img_tf)
 
     if input_scaler is None:
