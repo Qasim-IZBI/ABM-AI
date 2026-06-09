@@ -61,7 +61,7 @@ def parse_args():
                    help="Model architecture (default: mlp)")
 
     # ── Model — MLP-specific ──────────────────────────────────────────────────
-    p.add_argument("--hidden_dims", nargs="+", type=int, default=[256, 256, 128],
+    p.add_argument("--hidden_dims", nargs="+", type=int, default=[128, 64],
                    help="Hidden layer sizes (MLP, default: 256 256 128)")
     p.add_argument("--dropout", type=float, default=0.1)
     p.add_argument("--activation", default="relu", choices=["relu", "gelu", "silu"])
@@ -155,13 +155,17 @@ def main():
         with open(os.path.join(args.out, "label_scaler.pkl"), "wb") as f:
             pickle.dump(label_scaler, f)
 
+    # train_ds is always an ABMDataset in the pre-split path;
+    # in the random-split path full_ds is the ABMDataset (train_ds is a Subset).
+    ref_ds = train_ds if pre_split else full_ds
+
     print(f"Train: {n_train} samples   Val: {n_val} samples"
           + ("  [pre-split]" if pre_split else "  [random split]"))
-    print(f"Inputs : {full_ds.n_inputs}  {full_ds.input_names}")
+    print(f"Inputs : {ref_ds.n_inputs}  {ref_ds.input_names}")
     if args.model in IMAGE_GENERATION_MODELS:
         print(f"Output : RGB image ({args.image_size}×{args.image_size})")
     if args.model in NUMERICAL_PREDICTION_MODELS:
-        print(f"Output : numerical {full_ds.n_outputs}  {full_ds.output_names}")
+        print(f"Output : numerical {ref_ds.n_outputs}  {ref_ds.output_names}")
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
                               shuffle=True,  num_workers=4, pin_memory=True)
@@ -172,8 +176,8 @@ def main():
     # ── Model ────────────────────────────────────────────────────────────────
     model = build_model(
         args.model,
-        n_inputs=full_ds.n_inputs,
-        n_outputs=full_ds.n_outputs,
+        n_inputs=ref_ds.n_inputs,
+        n_outputs=ref_ds.n_outputs,
         # MLP args (ignored by cGAN config)
         hidden_dims=args.hidden_dims,
         dropout=args.dropout,
