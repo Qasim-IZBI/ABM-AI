@@ -1,61 +1,110 @@
-# ABM — Agent-Based Model Deep Learning Pipeline
+# ABM-AI — Agent-Based Model Deep Learning Pipeline
 
-Predicts cell population dynamics from ABM simulation parameters using deep learning.
+Predicts and generates cell population dynamics from ABM simulation parameters
+using five deep learning models spanning regression, deterministic image generation,
+and conditional GAN image synthesis.
+
+---
 
 ## Quick start
 
-### 1 — Sort data
+### 1 — Sort and split data
 ```bash
-python pipeline.py data1.txt data2.txt --images /path/to/images --out data/processed
+python pipeline.py data.txt --images /path/to/images \
+    --out data/processed \
+    --val_split 0.15 --test_split 0.15
 ```
 
-### 2 — Train
+### 2 — Train all models
 ```bash
-python train.py --data data/processed --model mlp --epochs 100 --out results/run1
+bash scripts/train_all.sh
 ```
 
-### 3 — Inference
+### 3 — Run inference on test set
 ```bash
-python inference.py --ckpt results/run1/checkpoints/epoch_0100.pt \
-                    --data data/processed --out predictions/
+bash scripts/infer_all.sh
 ```
+
+### 4 — Evaluate all models
+```bash
+bash scripts/eval_all.sh
+```
+
+---
+
+## Models
+
+| Name | Output 1 | Output 2 | Stochastic |
+|------|----------|----------|------------|
+| `mlp` | Numerical predictions | — | No |
+| `imreg` | Generated image | — | No |
+| `cgan` | Generated image | — | Yes (noise) |
+| `mmimreg` | Generated image | Numerical predictions | No |
+| `mmcgan` | Generated image | Numerical predictions | Yes (noise) |
+
+---
 
 ## Project structure
 
 ```
 ABM/
-├── pipeline.py          # Data sorting CLI: text files + images → .npy arrays
-├── train.py             # Training entry point
-├── inference.py         # Inference entry point
+├── pipeline.py          # Data sorting + train/val/test split CLI
+├── train.py             # Training entry point (all 5 models)
+├── inference.py         # Inference entry point (all 5 models)
+├── evaluation.py        # Metrics, scatter plots, image grids
 ├── utils.py             # Metrics, checkpointing, seeding
+│
 ├── datasets/
 │   ├── abm_dataset.py   # PyTorch Dataset (numerical + images)
 │   └── transforms.py    # MinMaxScaler, StandardScaler, ImageTransform
+│
 ├── models/
-│   └── mlp.py           # MLP regression model
+│   ├── base_models.py   # Shared: ConvUpGenerator, PatchDiscriminator, RegressionHead
+│   ├── mlp.py           # MLP regression
+│   ├── imreg.py         # Deterministic image generator
+│   ├── cgan.py          # Conditional GAN
+│   ├── mmimreg.py       # Multimodal: image + numerical (deterministic)
+│   └── mmcgan.py        # Multimodal: image + numerical (GAN)
+│
 ├── trainer/
-│   └── base_trainer.py  # Training loop with auto-resume
+│   └── base_trainer.py  # Universal training loop (regression + GAN)
+│
+├── scripts/
+│   ├── train_all.sh          # Train all models (sequential)
+│   ├── train_all_slurm.sh    # Train all models (SLURM array)
+│   ├── infer_all.sh          # Inference on all models (sequential)
+│   ├── infer_all_slurm.sh    # Inference on all models (SLURM array)
+│   ├── eval_all.sh           # Evaluate all models (sequential)
+│   └── eval_all_slurm.sh     # Evaluate all models (SLURM array)
+│
 └── tests/
     ├── conftest.py
-    └── test_datasets.py
+    ├── test_datasets.py
+    └── test_models.py
 ```
 
-## Inputs and outputs
+---
 
-| Role | Columns | Description |
-|------|---------|-------------|
-| Input | Line 2 | Default cell diffusion rate |
-| Input | Line 4 | Cellcycle time mean |
-| Output | Line 6 | Population size |
-| Output | Line 8 | Number of proliferating cells |
-| Output | Line 9 | Number of quiescent cells |
-| Output | Line 13 | Diameter (outer limits) |
-| Output | Line 14 | Extension in x |
-| Output | Line 15 | Extension in y |
+## Data columns
+
+| Role | Col | Description |
+|------|-----|-------------|
+| Input | 1 | Cell diffusion rate |
+| Input | 3 | Cellcycle time mean |
+| Output | 5 | Population size |
+| Output | 7 | Number of proliferating cells |
+| Output | 8 | Number of quiescent cells |
+| Output | 12 | Diameter (outer limits, µm) |
+| Output | 13 | Extension in x (µm) |
+| Output | 14 | Extension in y (µm) |
+
+Image filename pattern: `{population_name}_raymg000001.png`
+
+---
 
 ## Running tests
 
 ```bash
 pip install pytest torch torchvision pillow numpy
-pytest tests/
+pytest tests/ -v
 ```
