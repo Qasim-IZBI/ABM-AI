@@ -121,7 +121,14 @@ def main():
 
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                         num_workers=4, pin_memory=True)
-    print(f"Samples : {len(ds)}")
+
+    # Save which dataset indices were actually processed (some may be skipped
+    # when load_images=True and images are missing). evaluation.py uses this
+    # to select the matching rows from labels.npy.
+    np.save(os.path.join(args.out, "sample_indices.npy"), np.array(ds._indices))
+    print(f"Samples : {len(ds)} / {ds._inputs.shape[0]} total"
+          + (f"  ({ds._inputs.shape[0] - len(ds)} skipped — images missing)"
+             if len(ds) < ds._inputs.shape[0] else ""))
 
     # ── Run inference ─────────────────────────────────────────────────────────
     all_num_preds = []

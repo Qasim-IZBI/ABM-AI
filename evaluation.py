@@ -252,18 +252,35 @@ def main():
 
     results = {"run": run_name}
 
+    # ── Load sample indices written by inference.py ───────────────────────────
+    # When images are missing, inference skips those samples. sample_indices.npy
+    # records which rows of the original dataset were actually processed so we
+    # can select the matching rows from labels.npy and the real image dataset.
+    idx_path = os.path.join(args.inference_dir, "sample_indices.npy")
+    if os.path.isfile(idx_path):
+        sample_indices = np.load(idx_path)
+        print(f"Sample indices: {len(sample_indices)} of "
+              f"{np.load(os.path.join(args.data, 'labels.npy')).shape[0]} total")
+    else:
+        sample_indices = None
+        print("[INFO] sample_indices.npy not found — assuming all rows match")
+
     # ── Numerical evaluation ──────────────────────────────────────────────────
     if has_num:
         # Inference already outputs real units — compare directly to raw labels
-        preds_real  = torch.tensor(np.load(pred_path), dtype=torch.float32)
-        labels_raw  = torch.tensor(
-            np.load(os.path.join(args.data, "labels.npy")), dtype=torch.float32
-        )
+        preds_real = torch.tensor(np.load(pred_path), dtype=torch.float32)
+        all_labels = np.load(os.path.join(args.data, "labels.npy"))
+
+        if sample_indices is not None:
+            labels_raw = torch.tensor(all_labels[sample_indices], dtype=torch.float32)
+        else:
+            labels_raw = torch.tensor(all_labels, dtype=torch.float32)
 
         if preds_real.shape[0] != labels_raw.shape[0]:
             sys.exit(
                 f"ERROR: predictions.npy has {preds_real.shape[0]} rows but "
-                f"labels.npy has {labels_raw.shape[0]} rows."
+                f"selected labels have {labels_raw.shape[0]} rows.\n"
+                f"Re-run inference.py to regenerate sample_indices.npy."
             )
 
         # Output names from the dataset (no images needed)
@@ -289,18 +306,25 @@ def main():
         fakes_u8 = np.load(img_path)
         fakes    = torch.tensor(fakes_u8, dtype=torch.float32) / 127.5 - 1.0
 
-        # Load matching real images via the dataset
+        # Load real images — use sample_indices to load only the rows that
+        # inference actually processed (skipping any with missing images).
         img_tf = ImageTransform(args.image_size, train=False, pad=args.pad_images)
         ds_img = ABMDataset(args.data, load_images=True, image_transform=img_tf)
 
-        if len(ds_img) != fakes.shape[0]:
-            print(
-                f"[WARN] images.npy has {fakes.shape[0]} frames but dataset has "
-                f"{len(ds_img)} images — truncating to the smaller count."
-            )
-        n = min(len(ds_img), fakes.shape[0])
-        fakes = fakes[:n]
-        reals = torch.stack([ds_img[i]["image"] for i in range(n)])
+        if sample_indices is not None:
+            # Map inference sample_indices into the positions inside ds_img._indices
+            # ds_img._indices are the rows of the full dataset that have images;
+            # sample_indices are already the filtered rows, so they should match directly.
+            idx_in_ds = [ds_img._indices.index(i) for i in sample_indices
+                         if i in ds_img._indices]
+            reals = torch.stack([ds_img[j]["image"] for j in idx_in_ds])
+        else:
+            n = min(len(ds_img), fakes.shape[0])
+            if len(ds_img) != fakes.shape[0]:
+                print(f"[WARN] images.npy has {fakes.shape[0]} frames but dataset has "
+                      f"{len(ds_img)} — truncating to {n}")
+            reals = torch.stack([ds_img[i]["image"] for i in range(n)])
+            fakes = fakes[:n]
 
         results.setdefault("n_samples", n)
         results["image"] = image_metrics(fakes, reals)
