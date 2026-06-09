@@ -4,6 +4,8 @@ Predicts and generates cell population dynamics from ABM simulation parameters
 using five deep learning models spanning regression, deterministic image generation,
 and conditional GAN image synthesis.
 
+Dataset: ~1543 samples · Images: 1000×1000 px (zero-padded to 1024×1024)
+
 ---
 
 ## Quick start
@@ -17,30 +19,38 @@ python pipeline.py data.txt --images /path/to/images \
 
 ### 2 — Train all models
 ```bash
+# Single machine (sequential):
 bash scripts/train_all.sh
+
+# HPC cluster (all 5 models in parallel via SLURM):
+sbatch scripts/train_all_slurm.sh
 ```
 
 ### 3 — Run inference on test set
 ```bash
-bash scripts/infer_all.sh
+bash scripts/infer_all.sh          # single machine
+sbatch scripts/infer_all_slurm.sh  # SLURM cluster
 ```
 
 ### 4 — Evaluate all models
 ```bash
-bash scripts/eval_all.sh
+bash scripts/eval_all.sh           # single machine
+sbatch scripts/eval_all_slurm.sh   # SLURM cluster
 ```
 
 ---
 
 ## Models
 
-| Name | Output 1 | Output 2 | Stochastic |
-|------|----------|----------|------------|
-| `mlp` | Numerical predictions | — | No |
-| `imreg` | Generated image | — | No |
-| `cgan` | Generated image | — | Yes (noise) |
-| `mmimreg` | Generated image | Numerical predictions | No |
-| `mmcgan` | Generated image | Numerical predictions | Yes (noise) |
+| Name | Output 1 | Output 2 | Stochastic | Params |
+|------|----------|----------|------------|--------|
+| `mlp` | Numerical predictions | — | No | ~9k |
+| `imreg` | Generated image | — | No | ~736k |
+| `cgan` | Generated image | — | Yes (noise) | ~1.7M |
+| `mmimreg` | Generated image | Numerical predictions | No | ~740k |
+| `mmcgan` | Generated image | Numerical predictions | Yes (noise) | ~1.7M |
+
+Model sizes are tuned for ~1080 training samples (see [CLAUDE.md](CLAUDE.md) for rationale).
 
 ---
 
@@ -56,7 +66,7 @@ ABM/
 │
 ├── datasets/
 │   ├── abm_dataset.py   # PyTorch Dataset (numerical + images)
-│   └── transforms.py    # MinMaxScaler, StandardScaler, ImageTransform
+│   └── transforms.py    # MinMaxScaler, StandardScaler, ImageTransform (+pad mode)
 │
 ├── models/
 │   ├── base_models.py   # Shared: ConvUpGenerator, PatchDiscriminator, RegressionHead
@@ -70,8 +80,8 @@ ABM/
 │   └── base_trainer.py  # Universal training loop (regression + GAN)
 │
 ├── scripts/
-│   ├── train_all.sh          # Train all models (sequential)
-│   ├── train_all_slurm.sh    # Train all models (SLURM array)
+│   ├── train_all.sh          # Train all 5 models sequentially (single machine)
+│   ├── train_all_slurm.sh    # Train all 5 models in parallel (SLURM array)
 │   ├── infer_all.sh          # Inference on all models (sequential)
 │   ├── infer_all_slurm.sh    # Inference on all models (SLURM array)
 │   ├── eval_all.sh           # Evaluate all models (sequential)
@@ -99,6 +109,7 @@ ABM/
 | Output | 14 | Extension in y (µm) |
 
 Image filename pattern: `{population_name}_raymg000001.png`
+Native image size: **1000×1000 px** — zero-padded to **1024×1024** during training (12 px per side, no information loss).
 
 ---
 

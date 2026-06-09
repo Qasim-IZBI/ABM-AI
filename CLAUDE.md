@@ -11,8 +11,18 @@ outputs from Agent-Based Model (ABM) simulation parameters. The full pipeline is
 3. **Inference** (`inference.py`) — runs a trained model on new data (no labels needed).
 4. **Evaluate** (`evaluation.py`) — computes metrics and saves plots against ground truth.
 
-Batch shell scripts in `scripts/` automate steps 2–4 across all models sequentially
-or as SLURM array jobs.
+Batch shell scripts in `scripts/` cover steps 2–4 for both sequential (single machine)
+and parallel (SLURM cluster) execution.
+
+---
+
+## Dataset facts
+
+- **Total samples**: ~1543 · **Train**: ~1080 · **Val**: ~231 · **Test**: ~231
+- **Inputs**: 2 numerical parameters per simulation run
+- **Outputs**: 6 numerical values + 1000×1000 px RGB image
+- **Model sizes** are deliberately small (9k–1.7M params) to avoid overfitting ~1080 samples.
+  See the *Model sizing* section for the full rationale.
 
 ---
 
@@ -40,6 +50,41 @@ col 14  Extension in y           <- OUTPUT
 ```
 
 Image filename pattern: `{population_name}_raymg000001.png`
+Native image dimensions: **1000×1000 px**
+
+---
+
+## Image resolution — padding vs resizing
+
+Native images are 1000×1000 px. 1000 is not a power of 2, so `ConvUpGenerator`
+(which requires `log2(size / 4)` to be an integer) cannot use it directly.
+
+**Recommended approach — zero-padding to 1024:**
+- Adds 12 px of zeros symmetrically on each side: 1000 → 1024
+- **No pixel information is lost**
+- Pass `--pad_images` to `train.py`, `inference.py`, `evaluation.py`
+
+```
+ Original 1000×1000          Padded 1024×1024
+┌──────────────────┐       ┌──────────────────────┐
+│                  │  →    │ 12px black border    │
+│   actual image   │       │ ┌──────────────────┐ │
+│                  │       │ │   actual image   │ │
+└──────────────────┘       │ └──────────────────┘ │
+                           │ 12px black border    │
+                           └──────────────────────┘
+```
+
+**Alternative — resize to 512:**
+- Halves linear resolution (26% of native pixels)
+- Omit `--pad_images` and pass `--image_size 512`
+- Use when GPU memory is very limited
+
+| `--image_size` | Approach | Resolution | GPU mem / batch |
+|---|---|---|---|
+| **1024** (default) | `--pad_images` | **100% native** | ~200 MB |
+| 512 | resize | 26% native | ~50 MB |
+| 256 | resize | 6.5% native | ~13 MB |
 
 ---
 
@@ -58,12 +103,13 @@ python pipeline.py data1.txt data2.txt \
     --out data/processed \
     --val_split 0.15 --test_split 0.15
 
-# No split (flat output — old behaviour):
-python pipeline.py data.txt --images /imgs --out data/processed
-
-# Also load images as a numpy array (256×256 RGB):
-python pipeline.py data.txt --images /imgs --load-images --size 256 256 \
+# Also pre-load images as numpy arrays with zero-padding:
+python pipeline.py data.txt --images /imgs \
+    --load-images --size 1024 1024 --pad \
     --out data/processed --val_split 0.15 --test_split 0.15
+
+# No split — flat output (backwards compatible):
+python pipeline.py data.txt --images /imgs --out data/processed
 ```
 
 **With splitting**, outputs are written to three subdirectories:
@@ -74,31 +120,42 @@ data/processed/
 └── test/    inputs.npy  labels.npy  image_paths.txt   (~15 %)
 ```
 
-`train.py` automatically detects these subdirectories and uses the correct splits.
+`train.py` auto-detects these subdirectories and uses the pre-split data.
 The test set is never touched during training.
 
-**Without splitting**, all three files are written flat into `--out`.
+**Key flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--val_split` | 0 | Fraction for validation |
+| `--test_split` | 0 | Fraction for test set |
+| `--seed` | 42 | Shuffle seed for reproducibility |
+| `--load-images` | off | Pre-load all images into `images.npy` |
+| `--size W H` | 1024 1024 | Target size for `--load-images` |
+| `--pad` | off | Zero-pad instead of resize for `--load-images` |
 
 ---
 
 ## Step 2 — Train (`train.py`)
 
 `train.py` accepts all five model types via `--model`. It auto-detects whether
-`--data` contains pre-split subdirectories (from `pipeline.py`) or a flat directory.
+`--data` contains pre-split subdirectories or a flat directory.
+
+**Always pass `--pad_images` when working with 1000×1000 native images.**
 
 ### MLP (numerical regression)
 ```bash
 python train.py --data data/processed --model mlp \
     --epochs 200 --batch_size 64 --lr 1e-3 \
-    --hidden_dims 512 256 128 --dropout 0.1 --activation relu \
+    --hidden_dims 128 64 --dropout 0.2 --activation relu \
     --out results/mlp
 ```
 
 ### imreg (deterministic image generator)
 ```bash
 python train.py --data data/processed --model imreg \
-    --epochs 300 --batch_size 32 --lr 2e-4 \
-    --image_size 256 --ngf 64 \
+    --epochs 300 --batch_size 8 --lr 2e-4 \
+    --image_size 1024 --pad_images --ngf 32 \
     --lambda_l1 1.0 --lambda_mse 1.0 \
     --out results/imreg
 ```
@@ -106,8 +163,8 @@ python train.py --data data/processed --model imreg \
 ### cgan (conditional GAN)
 ```bash
 python train.py --data data/processed --model cgan \
-    --epochs 300 --batch_size 16 --lr 2e-4 \
-    --image_size 256 --ngf 64 --ndf 64 --noise_dim 128 \
+    --epochs 300 --batch_size 4 --lr 2e-4 \
+    --image_size 1024 --pad_images --ngf 32 --ndf 32 --noise_dim 64 \
     --lambda_l1 10.0 \
     --out results/cgan
 ```
@@ -115,8 +172,8 @@ python train.py --data data/processed --model cgan \
 ### mmimreg (multimodal deterministic: image + numerical)
 ```bash
 python train.py --data data/processed --model mmimreg \
-    --epochs 300 --batch_size 32 --lr 2e-4 \
-    --image_size 256 --ngf 64 --hidden_dims 256 128 \
+    --epochs 300 --batch_size 8 --lr 2e-4 \
+    --image_size 1024 --pad_images --ngf 32 --hidden_dims 64 64 \
     --lambda_l1 1.0 --lambda_mse 1.0 --lambda_reg 1.0 \
     --out results/mmimreg
 ```
@@ -124,9 +181,9 @@ python train.py --data data/processed --model mmimreg \
 ### mmcgan (multimodal GAN: image + numerical)
 ```bash
 python train.py --data data/processed --model mmcgan \
-    --epochs 400 --batch_size 16 --lr 2e-4 \
-    --image_size 256 --ngf 64 --ndf 64 --noise_dim 128 \
-    --hidden_dims 256 128 --lambda_l1 10.0 --lambda_reg 1.0 \
+    --epochs 400 --batch_size 4 --lr 2e-4 \
+    --image_size 1024 --pad_images --ngf 32 --ndf 32 --noise_dim 64 \
+    --hidden_dims 64 64 --lambda_l1 10.0 --lambda_reg 1.0 \
     --out results/mmcgan
 ```
 
@@ -134,28 +191,26 @@ python train.py --data data/processed --model mmcgan \
 checkpoint in `<out>/checkpoints/` automatically.
 
 **Scalers saved**: `train.py` writes `input_scaler.pkl` and (for numerical models)
-`label_scaler.pkl` to `<out>/`. These are loaded by `inference.py` and
-`evaluation.py` to denormalise outputs into real units.
+`label_scaler.pkl` to `<out>/`. These are loaded automatically by `inference.py`
+and `evaluation.py` to denormalise outputs into real units.
 
 ---
 
 ## Step 3 — Inference (`inference.py`)
 
-Handles all five model types. Loads scalers automatically from the same directory
-as the checkpoint.
+Handles all five model types. Loads scalers automatically.
 
 ```bash
-# Any model — same command:
+# Numerical model:
 python inference.py \
     --ckpt results/mlp/checkpoints/epoch_0200.pt \
-    --data data/processed/test \
-    --out  inference/mlp
+    --data data/processed/test --out inference/mlp
 
-# Also save individual PNGs for image models:
+# Image model with padding:
 python inference.py \
     --ckpt results/cgan/checkpoints/epoch_0300.pt \
-    --data data/processed/test \
-    --out  inference/cgan --save_images
+    --data data/processed/test --out inference/cgan \
+    --image_size 1024 --pad_images --save_images
 ```
 
 **Outputs by model type:**
@@ -173,16 +228,17 @@ python inference.py \
 Requires ground-truth labels. Loads scalers automatically.
 
 ```bash
+# Any model:
 python evaluation.py \
-    --ckpt results/mlp/checkpoints/epoch_0200.pt \
-    --data data/processed/test \
-    --out  eval/mlp
+    --ckpt results/mmimreg/checkpoints/epoch_0300.pt \
+    --data data/processed/test --out eval/mmimreg \
+    --image_size 1024 --pad_images
 
-# Headless server (no matplotlib):
+# Headless server (no matplotlib / plots):
 python evaluation.py \
     --ckpt results/mmcgan/checkpoints/epoch_0400.pt \
-    --data data/processed/test \
-    --out  eval/mmcgan --no_plots
+    --data data/processed/test --out eval/mmcgan \
+    --image_size 1024 --pad_images --no_plots
 ```
 
 **Outputs:**
@@ -200,47 +256,89 @@ SSIM requires `pip install scikit-image`. Scatter plots require `matplotlib`.
 
 ## Batch scripts
 
-All scripts share the same env-var overrides and automatically find the latest
-checkpoint in each model's `results/<model>/checkpoints/` directory.
+Six scripts in `scripts/` cover training, inference, and evaluation. Each script
+comes in two variants:
 
-### Sequential (single machine)
+### `*_all.sh` — sequential, single machine
+
+Runs models **one after another** on the machine where you launch it.
 
 ```bash
-# Train all 5 models:
 bash scripts/train_all.sh
-
-# Override paths and subset of models:
-DATA=/my/data OUT_ROOT=/my/results MODELS="mlp mmimreg" bash scripts/train_all.sh
-
-# Inference on test split:
 bash scripts/infer_all.sh
-
-# Evaluation on test split (headless):
-NO_PLOTS=1 bash scripts/eval_all.sh
-
-# Common env vars (all scripts):
-#   DATA          processed data directory
-#   RESULTS_ROOT  where training outputs live   (default: results)
-#   INFER_ROOT    where inference writes         (default: inference)
-#   EVAL_ROOT     where evaluation writes        (default: eval)
-#   SPLIT         which split to run on          (default: test)
-#   MODELS        space-separated model list
-#   CONDA_ENV     conda env name                 (default: abm)
+bash scripts/eval_all.sh
 ```
 
-### SLURM (cluster)
+All images are handled with `--pad_images` by default. Configuration via env vars:
 
 ```bash
-# Edit DATA / RESULTS_ROOT / CONDA_ENV at the top of each script, then:
-sbatch scripts/train_all_slurm.sh    # array 0-4, one GPU per model
+# Common overrides (all *_all.sh scripts):
+DATA=/my/data          # processed data directory
+RESULTS_ROOT=results   # where training outputs live
+INFER_ROOT=inference   # where inference writes
+EVAL_ROOT=eval         # where evaluation writes
+SPLIT=test             # which split to use (train|val|test)
+MODELS="mlp cgan"      # subset of models to run
+CONDA_ENV=abm          # conda environment name ("" to skip activation)
+NO_PLOTS=1             # skip matplotlib output (eval_all.sh only)
+SAVE_IMAGES=1          # write per-sample PNGs (infer_all.sh only)
+
+# Example:
+DATA=/my/data MODELS="mlp mmimreg" bash scripts/train_all.sh
+```
+
+### `*_all_slurm.sh` — parallel, SLURM cluster
+
+Submits all 5 models as **independent parallel jobs** to a SLURM scheduler.
+Each job gets its own dedicated GPU; all 5 finish in the time of the slowest one.
+
+```bash
+# Edit DATA / RESULTS_ROOT / CONDA_ENV at the top of each script first, then:
+sbatch scripts/train_all_slurm.sh    # --array=0-4, one GPU per model
 sbatch scripts/infer_all_slurm.sh
 sbatch scripts/eval_all_slurm.sh
 
-# Single model:
+# Single model by array index:
+sbatch --array=0 scripts/train_all_slurm.sh   # mlp only
 sbatch --array=2 scripts/train_all_slurm.sh   # cgan only
 ```
 
 **Array index mapping** (all SLURM scripts): `0=mlp  1=imreg  2=cgan  3=mmimreg  4=mmcgan`
+
+| | `*_all.sh` | `*_all_slurm.sh` |
+|---|---|---|
+| Where it runs | Your current machine | SLURM cluster |
+| Models run | One at a time | All 5 simultaneously |
+| Wall time | Sum of all 5 | Longest single model |
+| Survives disconnect | No | Yes |
+| Requires SLURM | No | Yes |
+
+---
+
+## Model sizing rationale
+
+With ~1080 training samples and only 2 input dimensions, large models overfit badly.
+Defaults were chosen to keep the samples-per-parameter ratio reasonable:
+
+| Model | Params | Samples/param |
+|-------|--------|---------------|
+| mlp | 9k | 0.12× |
+| imreg | 736k | 0.0015× |
+| cgan | 1.7M | 0.0006× |
+| mmimreg | 740k | 0.0015× |
+| mmcgan | 1.7M | 0.0006× |
+
+The image model ratios look low but are expected: each sample contains 1024×1024×3 ≈ 3M
+output values, and the 2D input space constrains what the model needs to learn.
+
+**Default hyperparameters (tuned for this dataset):**
+
+| Model | Key defaults |
+|-------|-------------|
+| mlp | `hidden_dims=[128,64]`, `dropout=0.2` |
+| imreg / mmimreg | `ngf=32`, `image_size=1024` |
+| cgan / mmcgan | `ngf=32`, `ndf=32`, `noise_dim=64`, `image_size=1024` |
+| mm* reg heads | `hidden_dims=[64,64]` |
 
 ---
 
@@ -249,45 +347,46 @@ sbatch --array=2 scripts/train_all_slurm.sh   # cgan only
 ### MLP (`models/mlp.py`)
 ```
 Input  : (B, 2)  — normalised [diffusion_rate, cellcycle_time_mean]
-FC → ReLU → Dropout  (repeated for each hidden layer)
+FC(2→128) → ReLU → Dropout(0.2) → FC(128→64) → ReLU → Dropout(0.2) → FC(64→6)
 Output : (B, 6)  — predicted simulation outputs
 ```
-Config: `MLPConfig(n_inputs, n_outputs, hidden_dims, dropout, activation)`
+Config: `MLPConfig(n_inputs, n_outputs, hidden_dims=[128,64], dropout=0.2, activation="relu")`
 
 ### imreg (`models/imreg.py`)
 ```
 Input  : (B, 2)  — condition
-FC → reshape → (ngf×8, 4, 4)
-6× ConvTranspose2d up-blocks → (3, 256, 256)  tanh
+FC(2 → ngf×8×4×4) → reshape(ngf×8, 4, 4)
+7× ConvTranspose2d up-blocks (4→8→…→512→1024) → tanh
+Output : (B, 3, 1024, 1024)
 ```
-Config: `ImageRegressorConfig(n_inputs, image_size, ngf, lambda_l1, lambda_mse)`
+Config: `ImageRegressorConfig(n_inputs, image_size=1024, ngf=32, lambda_l1=1.0, lambda_mse=1.0)`
 
 ### cgan (`models/cgan.py`)
 ```
-Generator  : cat(condition, noise) → FC → ConvTranspose2d × 6 → (3, 256, 256)
-Discriminator : 70×70 PatchGAN, condition broadcast spatially, spectral norm
+Generator  : cat(condition, noise) → FC → 7× ConvTranspose2d → (3, 1024, 1024)
+Discriminator : 70×70 PatchGAN — condition broadcast spatially, spectral norm + instance norm
 Loss G     : LSGAN adversarial  +  λ_l1 × L1(fake, real)
-Loss D     : LSGAN real/fake
+Loss D     : LSGAN real/fake (averaged)
 ```
-Config: `CGANConfig(n_inputs, noise_dim, image_size, ngf, ndf, lambda_l1)`
+Config: `CGANConfig(n_inputs, noise_dim=64, image_size=1024, ngf=32, ndf=32, lambda_l1=10.0)`
 
 ### mmimreg (`models/mmimreg.py`)
 ```
-Image branch   : ConvUpGenerator(condition) → (3, H, W)
-Numerical branch : RegressionHead(condition) → (n_outputs,)
-Loss : λ_l1 × L1  +  λ_mse × MSE (image)  +  λ_reg × MSE (numerical)
+Image branch     : ConvUpGenerator(condition) → (3, 1024, 1024)   [no noise]
+Numerical branch : RegressionHead(condition)  → (n_outputs,)
+Loss : λ_l1 × L1(img)  +  λ_mse × MSE(img)  +  λ_reg × MSE(numerical)
 ```
-Config: `MultiModalImRegConfig(n_inputs, n_outputs, image_size, ngf, hidden_dims, lambda_l1, lambda_mse, lambda_reg)`
+Config: `MultiModalImRegConfig(n_inputs, n_outputs, image_size=1024, ngf=32, hidden_dims=[64,64], lambda_l1=1.0, lambda_mse=1.0, lambda_reg=1.0)`
 
 ### mmcgan (`models/mmcgan.py`)
 ```
-G  : ConvUpGenerator(cat(condition, noise)) → (3, H, W)
-R  : RegressionHead(condition) → (n_outputs,)     [deterministic — no noise]
+G  : ConvUpGenerator(cat(condition, noise)) → (3, 1024, 1024)
+R  : RegressionHead(condition) → (n_outputs,)   [deterministic — no noise]
 D  : PatchDiscriminator(image, condition)
 Loss G : LSGAN_adv  +  λ_l1 × L1(fake, real)  +  λ_reg × MSE(ŷ, y)
 Loss D : LSGAN real/fake
 ```
-Config: `MultiModalCGANConfig(n_inputs, n_outputs, noise_dim, image_size, ngf, ndf, hidden_dims, lambda_l1, lambda_reg)`
+Config: `MultiModalCGANConfig(n_inputs, n_outputs, noise_dim=64, image_size=1024, ngf=32, ndf=32, hidden_dims=[64,64], lambda_l1=10.0, lambda_reg=1.0)`
 
 ### Shared components (`models/base_models.py`)
 - `ConvUpGenerator(in_channels, image_size, ngf)` — used by mmimreg and mmcgan
@@ -298,21 +397,23 @@ Config: `MultiModalCGANConfig(n_inputs, n_outputs, noise_dim, image_size, ngf, n
 
 ## Training interface (`trainer/base_trainer.py`)
 
-`BaseTrainer` detects the model type automatically:
+`BaseTrainer` detects the model type automatically from its methods:
 
 **Regression mode** (MLP): model exposes only `forward(x)`.
 ```
 Single AdamW optimizer — MSE loss — logs loss + R²
+Validation loop runs every epoch
 ```
 
-**Generator-only mode** (imreg, mmimreg): model exposes `generator_parameters()`
-and `compute_generator_loss(batch)` but NOT `discriminator_parameters()`.
+**Generator-only mode** (imreg, mmimreg): model has `generator_parameters()` and
+`compute_generator_loss(batch)` but NOT `discriminator_parameters()`.
 ```
-Single Adam optimizer (betas 0.5, 0.999) — no discriminator step
+Single Adam optimizer (betas=0.5, 0.999)
+No discriminator step
 ```
 
-**Full GAN mode** (cgan, mmcgan): model also exposes `discriminator_parameters()`
-and `compute_discriminator_loss(batch, visuals)`.
+**Full GAN mode** (cgan, mmcgan): model also has `discriminator_parameters()` and
+`compute_discriminator_loss(batch, visuals)`.
 ```
 Two Adam optimizers — alternating G and D steps each batch
 ```
@@ -334,7 +435,7 @@ Two Adam optimizers — alternating G and D steps each batch
 Saved every `--save_every` epochs as `<out>/checkpoints/epoch_NNNN.pt`.
 `BaseTrainer` auto-resumes from the highest-numbered checkpoint found.
 
-Adjacent to checkpoints, `train.py` also saves:
+Also saved adjacent to the checkpoints directory:
 - `<out>/input_scaler.pkl` — MinMaxScaler fitted on training inputs
 - `<out>/label_scaler.pkl` — MinMaxScaler fitted on training labels (numerical models only)
 
@@ -344,18 +445,20 @@ Adjacent to checkpoints, `train.py` also saves:
 
 - **Normalisation**: inputs scaled to `[0, 1]` with `MinMaxScaler` fitted on the
   training split only. Scalers are persisted to disk and loaded automatically by
-  `inference.py` and `evaluation.py` for real-unit output.
+  `inference.py` and `evaluation.py` to report metrics in real units.
 - **Images**: normalised to `[-1, 1]` by `ImageTransform`. Training applies random
   horizontal/vertical flips; inference/evaluation does not.
-- **Data splits**: run `pipeline.py --val_split 0.15 --test_split 0.15` once. All
-  subsequent runs use the same fixed split. The test set is held out until final
-  evaluation.
+- **Padding**: native images are 1000×1000 px. Pass `--pad_images` to zero-pad to
+  1024×1024 (12 px per side). This preserves all pixel information. Do not mix
+  `--pad_images` and resize modes between training and inference — they must match.
+- **Data splits**: run `pipeline.py --val_split 0.15 --test_split 0.15` once with
+  `--seed 42` (default). All subsequent runs see identical splits. The test set is
+  held out until final evaluation.
 - **Device**: auto-detected (`cuda` if available, else `cpu`).
-- **Reproducibility**: pass `--seed` to `train.py` (default 42); pass `--seed` to
-  `pipeline.py` for reproducible shuffling (default 42).
-- **Excluded columns**: cell-cell adhesion (col 2, constant 1.0), cellcycle SD
-  (col 4, constant 0.083), n_dead (col 9, always 0) are all excluded from inputs
-  and outputs.
+- **Reproducibility**: `--seed 42` in `train.py` (default). Pipeline shuffling uses
+  `--seed 42` (default).
+- **Excluded columns**: cell-cell adhesion (col 2, constant 1.0), cellcycle time SD
+  (col 4, constant 0.083), n_dead (col 9, always 0) — all excluded.
 
 ---
 
@@ -366,8 +469,9 @@ pip install pytest torch torchvision pillow numpy
 pytest tests/ -v
 ```
 
-37 tests covering dataset loading, scaler roundtrips, and forward passes + training
-interfaces for all five models. Tests use in-memory temporary data — no real files needed.
+37 tests covering dataset loading, scaler roundtrips, padding transform correctness,
+and forward passes + training interfaces for all five models.
+Tests use in-memory temporary data — no real files needed.
 
 ---
 
@@ -376,7 +480,7 @@ interfaces for all five models. Tests use in-memory temporary data — no real f
 ### Regression model (numerical output only)
 1. Create `models/<name>.py` with a `<Name>Config` dataclass and `<Name>(nn.Module)`.
 2. Implement `forward(x) -> Tensor` and `config_dict() -> dict`.
-3. Register in `models/__init__.py` `MODELS` dict and add to `NUMERICAL_PREDICTION_MODELS`.
+3. Register in `models/__init__.py` MODELS dict and add to `NUMERICAL_PREDICTION_MODELS`.
 4. `train.py` and `inference.py` pick it up automatically via `build_model`.
 
 ### Image-generation model (no discriminator)
