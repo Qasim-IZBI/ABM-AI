@@ -312,12 +312,11 @@ def main():
         ds_img = ABMDataset(args.data, load_images=True, image_transform=img_tf)
 
         if sample_indices is not None:
-            # Map inference sample_indices into the positions inside ds_img._indices
-            # ds_img._indices are the rows of the full dataset that have images;
-            # sample_indices are already the filtered rows, so they should match directly.
+            # Use sample_indices to load only the rows inference actually processed.
             idx_in_ds = [ds_img._indices.index(i) for i in sample_indices
                          if i in ds_img._indices]
             reals = torch.stack([ds_img[j]["image"] for j in idx_in_ds])
+            fakes = fakes[:len(reals)]
         else:
             n = min(len(ds_img), fakes.shape[0])
             if len(ds_img) != fakes.shape[0]:
@@ -326,7 +325,7 @@ def main():
             reals = torch.stack([ds_img[i]["image"] for i in range(n)])
             fakes = fakes[:n]
 
-        results.setdefault("n_samples", n)
+        results.setdefault("n_samples", fakes.shape[0])
         results["image"] = image_metrics(fakes, reals)
 
         if not args.no_plots:
