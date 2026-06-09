@@ -8,8 +8,10 @@ outputs from Agent-Based Model (ABM) simulation parameters. The full pipeline is
 1. **Sort + split** (`pipeline.py`) — parses tab-separated simulation logs, matches
    images, and writes fixed train/val/test splits.
 2. **Train** (`train.py`) — trains any of the five model architectures.
-3. **Inference** (`inference.py`) — runs a trained model on new data (no labels needed).
-4. **Evaluate** (`evaluation.py`) — computes metrics and saves plots against ground truth.
+3. **Inference** (`inference.py`) — runs a trained model on new data, saves predictions,
+   images (`.npy` + per-sample `.png`), and sample indices.
+4. **Evaluate** (`evaluation.py`) — loads inference outputs and computes metrics against
+   ground truth. No model reload; no GPU required.
 
 Batch shell scripts in `scripts/` cover steps 2–4 for both sequential (single machine)
 and parallel (SLURM cluster) execution.
@@ -192,13 +194,14 @@ checkpoint in `<out>/checkpoints/` automatically.
 
 **Scalers saved**: `train.py` writes `input_scaler.pkl` and (for numerical models)
 `label_scaler.pkl` to `<out>/`. These are loaded automatically by `inference.py`
-and `evaluation.py` to denormalise outputs into real units.
+to denormalise outputs into real units.
 
 ---
 
 ## Step 3 — Inference (`inference.py`)
 
-Handles all five model types. Loads scalers automatically.
+Handles all five model types. Loads scalers automatically from the results directory.
+Per-sample PNGs are saved by default alongside the numpy array.
 
 ```bash
 # Numerical model:
@@ -206,46 +209,79 @@ python inference.py \
     --ckpt results/mlp/checkpoints/epoch_0200.pt \
     --data data/processed/test --out inference/mlp
 
-# Image model with padding:
+# Image model:
 python inference.py \
     --ckpt results/cgan/checkpoints/epoch_0300.pt \
     --data data/processed/test --out inference/cgan \
-    --image_size 1024 --pad_images --save_images
+    --image_size 1024 --pad_images
+
+# Skip individual PNGs (saves disk space):
+python inference.py ... --no_png
 ```
 
 **Outputs by model type:**
 
-| Model | `predictions.npy` | `images.npy` | `images/*.png` |
-|-------|-------------------|--------------|----------------|
-| mlp | ✓ real units | — | — |
-| imreg / cgan | — | ✓ | ✓ (if `--save_images`) |
-| mmimreg / mmcgan | ✓ real units | ✓ | ✓ (if `--save_images`) |
+| Model | `predictions.npy` | `images.npy` | `images/*.png` | `sample_indices.npy` |
+|-------|:-----------------:|:------------:|:--------------:|:--------------------:|
+| mlp | ✓ real units | — | — | ✓ |
+| imreg / cgan | — | ✓ | ✓ | ✓ |
+| mmimreg / mmcgan | ✓ real units | ✓ | ✓ | ✓ |
+
+- `predictions.npy` — denormalised to real units via the training scaler
+- `images.npy` — uint8 array, shape `(N, 3, H, W)`, range 0–255
+- `images/*.png` — one PNG per sample, named after the source simulation
+  (e.g. `B5_T2_1_2_rayimg000001.png`)
+- `sample_indices.npy` — indices of samples actually processed (used by
+  `evaluation.py` to align predictions with `labels.npy` when images are missing)
+
+**Batch sizes at 1024×1024** (set by the infer scripts to avoid GPU OOM):
+
+| Model | Inference batch | Note |
+|-------|----------------|------|
+| mlp | 128 | No images |
+| imreg / mmimreg | 16 | Generator only |
+| cgan / mmcgan | 8 | Generator + discriminator loaded |
+
+The scripts also set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to reduce
+memory fragmentation on GPUs with limited VRAM.
 
 ---
 
 ## Step 4 — Evaluation (`evaluation.py`)
 
-Requires ground-truth labels. Loads scalers automatically.
+Reads pre-computed inference outputs — **no model, no checkpoint, no GPU needed**.
+Must be run after `inference.py`.
 
 ```bash
 # Any model:
 python evaluation.py \
-    --ckpt results/mmimreg/checkpoints/epoch_0300.pt \
-    --data data/processed/test --out eval/mmimreg \
-    --image_size 1024 --pad_images
+    --inference_dir inference/mlp \
+    --data data/processed/test \
+    --out eval/mlp
 
-# Headless server (no matplotlib / plots):
+# Image model with padding (must match inference settings):
 python evaluation.py \
-    --ckpt results/mmcgan/checkpoints/epoch_0400.pt \
-    --data data/processed/test --out eval/mmcgan \
-    --image_size 1024 --pad_images --no_plots
+    --inference_dir inference/mmcgan \
+    --data data/processed/test \
+    --out eval/mmcgan \
+    --pad_images
+
+# Headless server (no matplotlib):
+python evaluation.py \
+    --inference_dir inference/cgan \
+    --data data/processed/test \
+    --out eval/cgan \
+    --pad_images --no_plots
 ```
+
+`sample_indices.npy` (written by inference) is loaded automatically to align
+predictions with ground truth even when some images were missing during inference.
 
 **Outputs:**
 
 | File | Numerical models | Image models |
 |------|-----------------|--------------|
-| `metrics.json` | MSE, MAE, R² (normalised + real units) | PSNR, L1, SSIM |
+| `metrics.json` | MSE, MAE, R² in real units | PSNR, L1, SSIM |
 | `predictions.csv` | per-sample predicted vs actual | — |
 | `scatter.png` | predicted vs actual per output | — |
 | `image_grid.png` | — | real (top) vs generated (bottom) |
@@ -257,50 +293,46 @@ SSIM requires `pip install scikit-image`. Scatter plots require `matplotlib`.
 ## Batch scripts
 
 Six scripts in `scripts/` cover training, inference, and evaluation. Each script
-comes in two variants:
+comes in two variants.
 
 ### `*_all.sh` — sequential, single machine
-
-Runs models **one after another** on the machine where you launch it.
 
 ```bash
 bash scripts/train_all.sh
 bash scripts/infer_all.sh
-bash scripts/eval_all.sh
+bash scripts/eval_all.sh    # reads from inference/, no GPU needed
 ```
 
-All images are handled with `--pad_images` by default. Configuration via env vars:
+Configuration via env vars:
 
 ```bash
-# Common overrides (all *_all.sh scripts):
+# train_all.sh / infer_all.sh / eval_all.sh
 DATA=/my/data          # processed data directory
 RESULTS_ROOT=results   # where training outputs live
-INFER_ROOT=inference   # where inference writes
+INFER_ROOT=inference   # where inference writes / eval reads from
 EVAL_ROOT=eval         # where evaluation writes
 SPLIT=test             # which split to use (train|val|test)
 MODELS="mlp cgan"      # subset of models to run
-CONDA_ENV=abm          # conda environment name ("" to skip activation)
-NO_PLOTS=1             # skip matplotlib output (eval_all.sh only)
-SAVE_IMAGES=1          # write per-sample PNGs (infer_all.sh only)
+CONDA_ENV=abm          # conda environment name ("" to skip)
 
-# Example:
-DATA=/my/data MODELS="mlp mmimreg" bash scripts/train_all.sh
+# infer_all.sh only:
+NO_PNG=1               # skip per-sample PNGs (saves disk space)
+
+# eval_all.sh only:
+NO_PLOTS=1             # skip scatter.png / image_grid.png (headless)
+N_IMAGES=8             # number of image pairs in eval grid
 ```
 
 ### `*_all_slurm.sh` — parallel, SLURM cluster
 
-Submits all 5 models as **independent parallel jobs** to a SLURM scheduler.
-Each job gets its own dedicated GPU; all 5 finish in the time of the slowest one.
-
 ```bash
-# Edit DATA / RESULTS_ROOT / CONDA_ENV at the top of each script first, then:
+# Edit DATA / INFER_ROOT / CONDA_ENV at the top of each script first, then:
 sbatch scripts/train_all_slurm.sh    # --array=0-4, one GPU per model
-sbatch scripts/infer_all_slurm.sh
-sbatch scripts/eval_all_slurm.sh
+sbatch scripts/infer_all_slurm.sh    # --array=0-4, one GPU per model
+sbatch scripts/eval_all_slurm.sh     # --array=0-4, CPU partition (no GPU)
 
 # Single model by array index:
-sbatch --array=0 scripts/train_all_slurm.sh   # mlp only
-sbatch --array=2 scripts/train_all_slurm.sh   # cgan only
+sbatch --array=3,4 scripts/infer_all_slurm.sh   # mmimreg + mmcgan only
 ```
 
 **Array index mapping** (all SLURM scripts): `0=mlp  1=imreg  2=cgan  3=mmimreg  4=mmcgan`
@@ -312,6 +344,7 @@ sbatch --array=2 scripts/train_all_slurm.sh   # cgan only
 | Wall time | Sum of all 5 | Longest single model |
 | Survives disconnect | No | Yes |
 | Requires SLURM | No | Yes |
+| Eval needs GPU | No | No (`--partition=cpu`) |
 
 ---
 
@@ -331,9 +364,9 @@ Defaults were chosen to keep the samples-per-parameter ratio reasonable:
 The image model ratios look low but are expected: each sample contains 1024×1024×3 ≈ 3M
 output values, and the 2D input space constrains what the model needs to learn.
 
-**Default hyperparameters (tuned for this dataset):**
+**Recommended hyperparameters (used by `train_all.sh`; CLI defaults differ):**
 
-| Model | Key defaults |
+| Model | Recommended values |
 |-------|-------------|
 | mlp | `hidden_dims=[128,64]`, `dropout=0.2` |
 | imreg / mmimreg | `ngf=32`, `image_size=1024` |
@@ -445,20 +478,27 @@ Also saved adjacent to the checkpoints directory:
 
 - **Normalisation**: inputs scaled to `[0, 1]` with `MinMaxScaler` fitted on the
   training split only. Scalers are persisted to disk and loaded automatically by
-  `inference.py` and `evaluation.py` to report metrics in real units.
+  `inference.py` to report predictions in real units. `evaluation.py` reads real-unit
+  predictions directly from `predictions.npy` — no scaler loading needed.
 - **Images**: normalised to `[-1, 1]` by `ImageTransform`. Training applies random
   horizontal/vertical flips; inference/evaluation does not.
 - **Padding**: native images are 1000×1000 px. Pass `--pad_images` to zero-pad to
-  1024×1024 (12 px per side). This preserves all pixel information. Do not mix
-  `--pad_images` and resize modes between training and inference — they must match.
+  1024×1024 (12 px per side). Preserves all pixel information. `--pad_images` must
+  be consistent across `train.py`, `inference.py`, and `evaluation.py`.
+- **Sample indices**: `inference.py` saves `sample_indices.npy` — the subset of
+  dataset rows actually processed (some may be skipped if images are missing).
+  `evaluation.py` loads this automatically to align predictions with `labels.npy`.
 - **Data splits**: run `pipeline.py --val_split 0.15 --test_split 0.15` once with
   `--seed 42` (default). All subsequent runs see identical splits. The test set is
   held out until final evaluation.
+- **SLURM working directory**: always submit from the project root. SLURM scripts use
+  `SLURM_SUBMIT_DIR` (not `dirname $0`) so they resolve paths correctly after the
+  scheduler copies the script to its spool directory.
+- **GPU OOM at 1024px**: inference scripts set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+  and use per-model batch sizes (mlp=128, imreg/mmimreg=16, cgan/mmcgan=8).
 - **Device**: auto-detected (`cuda` if available, else `cpu`).
-- **Reproducibility**: `--seed 42` in `train.py` (default). Pipeline shuffling uses
-  `--seed 42` (default).
-- **Excluded columns**: cell-cell adhesion (col 2, constant 1.0), cellcycle time SD
-  (col 4, constant 0.083), n_dead (col 9, always 0) — all excluded.
+- **Reproducibility**: `--seed 42` in `train.py` (default).
+- **Excluded columns**: cell-cell adhesion (col 2), cellcycle SD (col 4), n_dead (col 9).
 
 ---
 
@@ -469,8 +509,8 @@ pip install pytest torch torchvision pillow numpy
 pytest tests/ -v
 ```
 
-37 tests covering dataset loading, scaler roundtrips, padding transform correctness,
-and forward passes + training interfaces for all five models.
+37 tests covering dataset loading, scaler roundtrips, forward passes and training
+interfaces for all five models, and error handling when images are missing.
 Tests use in-memory temporary data — no real files needed.
 
 ---

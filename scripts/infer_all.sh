@@ -7,7 +7,7 @@
 #   bash scripts/infer_all.sh
 #   DATA=/my/processed RESULTS_ROOT=/my/results bash scripts/infer_all.sh
 #   SPLIT=val MODELS="mlp mmimreg" bash scripts/infer_all.sh
-#   SAVE_IMAGES=1 bash scripts/infer_all.sh          # also write per-sample PNGs
+#   NO_PNG=1 bash scripts/infer_all.sh               # skip per-sample PNGs
 #
 # Outputs are written to:
 #   $INFER_ROOT/<model>/predictions.npy   (numerical models)

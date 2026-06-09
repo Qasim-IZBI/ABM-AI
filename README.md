@@ -19,11 +19,8 @@ python pipeline.py data.txt --images /path/to/images \
 
 ### 2 — Train all models
 ```bash
-# Single machine (sequential):
-bash scripts/train_all.sh
-
-# HPC cluster (all 5 models in parallel via SLURM):
-sbatch scripts/train_all_slurm.sh
+bash scripts/train_all.sh          # single machine (sequential)
+sbatch scripts/train_all_slurm.sh  # HPC cluster (all 5 in parallel)
 ```
 
 ### 3 — Run inference on test set
@@ -34,8 +31,8 @@ sbatch scripts/infer_all_slurm.sh  # SLURM cluster
 
 ### 4 — Evaluate all models
 ```bash
-bash scripts/eval_all.sh           # single machine
-sbatch scripts/eval_all_slurm.sh   # SLURM cluster
+bash scripts/eval_all.sh           # single machine (must run after step 3)
+sbatch scripts/eval_all_slurm.sh   # SLURM cluster (CPU only, no GPU needed)
 ```
 
 ---
@@ -61,7 +58,7 @@ ABM/
 ├── pipeline.py          # Data sorting + train/val/test split CLI
 ├── train.py             # Training entry point (all 5 models)
 ├── inference.py         # Inference entry point (all 5 models)
-├── evaluation.py        # Metrics, scatter plots, image grids
+├── evaluation.py        # Metrics, scatter plots, image grids (uses inference outputs)
 ├── utils.py             # Metrics, checkpointing, seeding
 │
 ├── datasets/
@@ -84,8 +81,8 @@ ABM/
 │   ├── train_all_slurm.sh    # Train all 5 models in parallel (SLURM array)
 │   ├── infer_all.sh          # Inference on all models (sequential)
 │   ├── infer_all_slurm.sh    # Inference on all models (SLURM array)
-│   ├── eval_all.sh           # Evaluate all models (sequential)
-│   └── eval_all_slurm.sh     # Evaluate all models (SLURM array)
+│   ├── eval_all.sh           # Evaluate all models (sequential, uses inference outputs)
+│   └── eval_all_slurm.sh     # Evaluate all models (SLURM array, CPU partition)
 │
 └── tests/
     ├── conftest.py
@@ -110,6 +107,36 @@ ABM/
 
 Image filename pattern: `{population_name}_rayimg000001.png`
 Native image size: **1000×1000 px** — zero-padded to **1024×1024** during training (12 px per side, no information loss).
+
+---
+
+## Inference outputs (per model)
+
+| Model | `predictions.npy` | `images.npy` | `images/*.png` | `sample_indices.npy` |
+|-------|:-----------------:|:------------:|:--------------:|:--------------------:|
+| mlp | ✓ real units | — | — | ✓ |
+| imreg / cgan | — | ✓ | ✓ | ✓ |
+| mmimreg / mmcgan | ✓ real units | ✓ | ✓ | ✓ |
+
+PNGs are named after the source simulation (e.g. `B5_T2_1_2_rayimg000001.png`).
+Pass `--no_png` to skip individual PNGs if disk space is limited.
+
+---
+
+## Evaluation inputs
+
+`evaluation.py` reads inference outputs — **no model or GPU needed**.
+
+```
+inference/mlp/          →   eval/mlp/
+├── predictions.npy         ├── metrics.json
+└── sample_indices.npy      ├── predictions.csv
+                            └── scatter.png
+
+inference/cgan/         →   eval/cgan/
+├── images.npy              ├── metrics.json
+└── sample_indices.npy      └── image_grid.png
+```
 
 ---
 

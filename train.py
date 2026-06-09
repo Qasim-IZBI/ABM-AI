@@ -62,7 +62,7 @@ def parse_args():
 
     # ── Model — MLP-specific ──────────────────────────────────────────────────
     p.add_argument("--hidden_dims", nargs="+", type=int, default=[128, 64],
-                   help="Hidden layer sizes (MLP, default: 256 256 128)")
+                   help="Hidden layer sizes (MLP, default: 128 64)")
     p.add_argument("--dropout", type=float, default=0.1)
     p.add_argument("--activation", default="relu", choices=["relu", "gelu", "silu"])
 
