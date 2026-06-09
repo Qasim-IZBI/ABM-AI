@@ -108,7 +108,7 @@ ABM/
 | Output | 13 | Extension in x (µm) |
 | Output | 14 | Extension in y (µm) |
 
-Image filename pattern: `{population_name}_raymg000001.png`
+Image filename pattern: `{population_name}_rayimg000001.png`
 Native image size: **1000×1000 px** — zero-padded to **1024×1024** during training (12 px per side, no information loss).
 
 ---

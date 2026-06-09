@@ -49,7 +49,7 @@ col 13  Extension in x           <- OUTPUT
 col 14  Extension in y           <- OUTPUT
 ```
 
-Image filename pattern: `{population_name}_raymg000001.png`
+Image filename pattern: `{population_name}_rayimg000001.png`
 Native image dimensions: **1000×1000 px**
 
 ---

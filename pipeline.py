@@ -46,7 +46,7 @@ INPUT_NAMES  = ["diffusion_rate", "cellcycle_time_mean"]
 OUTPUT_NAMES = ["population_size", "n_proliferating", "n_quiescent",
                 "diameter_outer_limits", "extension_x", "extension_y"]
 
-IMAGE_SUFFIX = "_raymg000001.png"
+IMAGE_SUFFIX = "_rayimg000001.png"
 
 
 def parse_args():
@@ -94,7 +94,7 @@ def load_text_file(path):
 
 
 def find_image(name, search_dirs):
-    """Return the first existing path for <name>_raymg000001.png, or None."""
+    """Return the first existing path for <name>_rayimg000001.png, or None."""
     filename = f"{name}{IMAGE_SUFFIX}"
     for d in search_dirs:
         candidate = os.path.join(d, filename)
