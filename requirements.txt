@@ -1,3 +1,5 @@
+# Python 3.11 recommended (3.10–3.12 also work; 3.13 is untested by most deps)
+
 # Core
 torch>=2.0.0
 torchvision>=0.15.0
