@@ -20,9 +20,10 @@ def test_dataset_item_shapes(tmp_data_dir):
     assert "image" not in item
 
 
-def test_dataset_skips_missing_images(tmp_data_dir):
-    ds = ABMDataset(tmp_data_dir, load_images=True)
-    assert len(ds) == 0   # all 20 marked MISSING
+def test_dataset_raises_when_all_images_missing(tmp_data_dir):
+    import pytest
+    with pytest.raises(RuntimeError, match="No images found"):
+        ABMDataset(tmp_data_dir, load_images=True)
 
 
 def test_minmax_scaler_roundtrip():

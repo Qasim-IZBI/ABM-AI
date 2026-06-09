@@ -65,7 +65,20 @@ class ABMDataset(Dataset):
             ]
             n_missing = n - len(valid)
             if n_missing:
-                print(f"[ABMDataset] {n_missing}/{n} samples skipped — images missing")
+                print(f"[ABMDataset] {n_missing}/{n} images missing — those samples skipped")
+                # Show the first missing path so the user knows where to look
+                first_missing = next(
+                    p for p in self._image_paths if p == "MISSING" or not os.path.isfile(p)
+                )
+                print(f"[ABMDataset] First missing path: {first_missing}")
+            if len(valid) == 0:
+                raise RuntimeError(
+                    f"No images found in {data_dir}.\n"
+                    f"  All {n} paths in image_paths.txt are missing or unresolvable.\n"
+                    f"  First entry: {self._image_paths[0]}\n"
+                    f"  Re-run pipeline.py with --images pointing to the correct directory, "
+                    f"or train without images (numerical-only models do not need them)."
+                )
             self._indices = valid
         else:
             self._indices = list(range(n))
