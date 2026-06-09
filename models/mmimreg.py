@@ -13,8 +13,8 @@ class MultiModalImRegConfig:
     n_inputs:    int
     n_outputs:   int                                           # number of numerical outputs
     image_size:  int = 256
-    ngf:         int = 64
-    hidden_dims: List[int] = field(default_factory=lambda: [256, 128])
+    ngf:         int = 32
+    hidden_dims: List[int] = field(default_factory=lambda: [64, 64])
     lambda_l1:   float = 1.0   # weight of image L1 loss
     lambda_mse:  float = 1.0   # weight of image MSE loss
     lambda_reg:  float = 1.0   # weight of numerical MSE loss

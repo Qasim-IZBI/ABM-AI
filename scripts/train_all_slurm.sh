@@ -68,8 +68,8 @@ case "${MODEL}" in
             --epochs      200           \
             --batch_size  64            \
             --lr          1e-3          \
-            --hidden_dims 512 256 128   \
-            --dropout     0.1           \
+            --hidden_dims 128 64        \
+            --dropout     0.2           \
             --activation  relu          \
             --save_every  20            \
             --log_every   10
@@ -84,7 +84,7 @@ case "${MODEL}" in
             --batch_size  32            \
             --lr          2e-4          \
             --image_size  256           \
-            --ngf         64            \
+            --ngf         32            \
             --lambda_l1   1.0           \
             --lambda_mse  1.0           \
             --save_every  25            \
@@ -100,9 +100,9 @@ case "${MODEL}" in
             --batch_size  16            \
             --lr          2e-4          \
             --image_size  256           \
-            --ngf         64            \
-            --ndf         64            \
-            --noise_dim   128           \
+            --ngf         32            \
+            --ndf         32            \
+            --noise_dim   64            \
             --lambda_l1   10.0          \
             --save_every  25            \
             --log_every   10
@@ -117,8 +117,8 @@ case "${MODEL}" in
             --batch_size  32            \
             --lr          2e-4          \
             --image_size  256           \
-            --ngf         64            \
-            --hidden_dims 256 128       \
+            --ngf         32            \
+            --hidden_dims 64 64         \
             --lambda_l1   1.0           \
             --lambda_mse  1.0           \
             --lambda_reg  1.0           \
@@ -135,10 +135,10 @@ case "${MODEL}" in
             --batch_size  16            \
             --lr          2e-4          \
             --image_size  256           \
-            --ngf         64            \
-            --ndf         64            \
-            --noise_dim   128           \
-            --hidden_dims 256 128       \
+            --ngf         32            \
+            --ndf         32            \
+            --noise_dim   64            \
+            --hidden_dims 64 64         \
             --lambda_l1   10.0          \
             --lambda_reg  1.0           \
             --save_every  25            \

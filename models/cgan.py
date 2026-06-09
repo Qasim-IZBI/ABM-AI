@@ -10,10 +10,10 @@ import torch.nn.functional as F
 class CGANConfig:
     n_inputs:   int               # number of conditioning input features
     n_outputs:  int = 0           # unused; kept for build_model interface parity
-    noise_dim:  int = 128         # latent noise vector dimension
+    noise_dim:  int = 64          # latent noise vector dimension
     image_size: int = 256         # output image H = W (must be a power of 2, ≥ 64)
-    ngf:        int = 64          # base channel count in generator
-    ndf:        int = 64          # base channel count in discriminator
+    ngf:        int = 32          # base channel count in generator
+    ndf:        int = 32          # base channel count in discriminator
     lambda_l1:  float = 10.0     # weight of L1 pixel loss relative to adversarial loss
 
 

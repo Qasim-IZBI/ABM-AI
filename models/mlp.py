@@ -9,8 +9,8 @@ import torch.nn as nn
 class MLPConfig:
     n_inputs:     int
     n_outputs:    int
-    hidden_dims:  List[int] = field(default_factory=lambda: [256, 256, 128])
-    dropout:      float = 0.1
+    hidden_dims:  List[int] = field(default_factory=lambda: [128, 64])
+    dropout:      float = 0.2
     activation:   str = "relu"   # "relu" | "gelu" | "silu"
 
 

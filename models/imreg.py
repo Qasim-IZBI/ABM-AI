@@ -11,7 +11,7 @@ class ImageRegressorConfig:
     n_inputs:   int               # number of conditioning input features
     n_outputs:  int = 0           # unused; kept for build_model interface parity
     image_size: int = 256         # output image H = W (must be a power of 2, ≥ 64)
-    ngf:        int = 64          # base channel count
+    ngf:        int = 32          # base channel count
     lambda_l1:  float = 1.0      # weight of L1 pixel loss
     lambda_mse: float = 1.0      # weight of MSE pixel loss
 

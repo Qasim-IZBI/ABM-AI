@@ -12,11 +12,11 @@ from .base_models import ConvUpGenerator, PatchDiscriminator, RegressionHead
 class MultiModalCGANConfig:
     n_inputs:    int
     n_outputs:   int                                           # number of numerical outputs
-    noise_dim:   int = 128
+    noise_dim:   int = 64
     image_size:  int = 256
-    ngf:         int = 64
-    ndf:         int = 64
-    hidden_dims: List[int] = field(default_factory=lambda: [256, 128])
+    ngf:         int = 32
+    ndf:         int = 32
+    hidden_dims: List[int] = field(default_factory=lambda: [64, 64])
     lambda_l1:   float = 10.0  # weight of image L1 loss
     lambda_reg:  float = 1.0   # weight of numerical MSE loss
 
