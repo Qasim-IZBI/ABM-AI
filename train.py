@@ -45,8 +45,10 @@ def parse_args():
                         "(inputs.npy, labels.npy, image_paths.txt)")
     p.add_argument("--load_images", action="store_true",
                    help="Load images per sample. Automatically enabled for cgan.")
-    p.add_argument("--image_size", type=int, default=256,
-                   help="Resize target for images (default: 256)")
+    p.add_argument("--image_size", type=int, default=512,
+                   help="Resize target for images in pixels — must be a power of 2 "
+                        "(default: 512). Native images are 1000×1000; nearest "
+                        "power-of-2 options are 512 (half-res) or 1024 (full-res).")
     p.add_argument("--val_split", type=float, default=0.15,
                    help="Fraction of data used for validation (default: 0.15)")
 

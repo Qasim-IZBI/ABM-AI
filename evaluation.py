@@ -78,8 +78,8 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--n_images", type=int, default=8,
                    help="Number of image pairs to show in the grid (default: 8)")
-    p.add_argument("--image_size", type=int, default=256,
-                   help="Image resize target, must match training (default: 256)")
+    p.add_argument("--image_size", type=int, default=512,
+                   help="Image resize target, must match training (default: 512)")
     p.add_argument("--no_plots", action="store_true",
                    help="Skip all plot/image outputs (useful on headless servers)")
     return p.parse_args()

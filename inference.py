@@ -48,8 +48,8 @@ def parse_args():
     p.add_argument("--out", default="inference", metavar="DIR",
                    help="Directory to write outputs (default: inference)")
     p.add_argument("--batch_size", type=int, default=128)
-    p.add_argument("--image_size", type=int, default=256,
-                   help="Image resize, must match training (default: 256)")
+    p.add_argument("--image_size", type=int, default=512,
+                   help="Image resize, must match training (default: 512)")
     p.add_argument("--save_images", action="store_true",
                    help="Save each generated image as an individual PNG")
     return p.parse_args()

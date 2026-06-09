@@ -13,7 +13,7 @@ class MultiModalCGANConfig:
     n_inputs:    int
     n_outputs:   int                                           # number of numerical outputs
     noise_dim:   int = 64
-    image_size:  int = 256
+    image_size:  int = 512
     ngf:         int = 32
     ndf:         int = 32
     hidden_dims: List[int] = field(default_factory=lambda: [64, 64])

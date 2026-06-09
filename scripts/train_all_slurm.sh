@@ -81,9 +81,9 @@ case "${MODEL}" in
             --model       imreg         \
             --out         "${OUT}"      \
             --epochs      300           \
-            --batch_size  32            \
+            --batch_size  16            \
             --lr          2e-4          \
-            --image_size  256           \
+            --image_size  512           \
             --ngf         32            \
             --lambda_l1   1.0           \
             --lambda_mse  1.0           \
@@ -97,9 +97,9 @@ case "${MODEL}" in
             --model       cgan          \
             --out         "${OUT}"      \
             --epochs      300           \
-            --batch_size  16            \
+            --batch_size  8             \
             --lr          2e-4          \
-            --image_size  256           \
+            --image_size  512           \
             --ngf         32            \
             --ndf         32            \
             --noise_dim   64            \
@@ -114,9 +114,9 @@ case "${MODEL}" in
             --model       mmimreg       \
             --out         "${OUT}"      \
             --epochs      300           \
-            --batch_size  32            \
+            --batch_size  16            \
             --lr          2e-4          \
-            --image_size  256           \
+            --image_size  512           \
             --ngf         32            \
             --hidden_dims 64 64         \
             --lambda_l1   1.0           \
@@ -132,9 +132,9 @@ case "${MODEL}" in
             --model       mmcgan        \
             --out         "${OUT}"      \
             --epochs      400           \
-            --batch_size  16            \
+            --batch_size  8             \
             --lr          2e-4          \
-            --image_size  256           \
+            --image_size  512           \
             --ngf         32            \
             --ndf         32            \
             --noise_dim   64            \
