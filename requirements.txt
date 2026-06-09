@@ -1,0 +1,14 @@
+# Core
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+pillow>=9.0.0
+
+# Testing
+pytest>=7.0.0
+
+# Evaluation (optional — enables SSIM metric in evaluation.py)
+scikit-image>=0.20.0
+
+# Visualisation (optional — enables scatter plots in evaluation.py)
+matplotlib>=3.6.0
