@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
 """
-ABM evaluation script — computes metrics and saves visualisations for any trained model.
+ABM evaluation — scores pre-computed inference outputs against ground truth.
 
-Metrics
--------
-  Numerical outputs   : MSE, MAE, R² — per output column and averaged
-                        reported in both normalised [0, 1] and original units
-  Image outputs       : PSNR, L1 pixel error, SSIM (if scikit-image installed)
+Reads the outputs written by inference.py (predictions.npy, images.npy) and
+compares them to the ground truth in the data directory. The model is NOT
+reloaded — no checkpoint or GPU needed.
 
 Outputs written to --out
 ------------------------
   metrics.json        — all scalar metrics
-  predictions.csv     — per-sample predicted vs actual  (numerical models)
-  scatter.png         — predicted vs actual scatter      (numerical models)
-  image_grid.png      — real (top) vs generated (bottom) (image models)
+  predictions.csv     — per-sample predicted vs actual  (numerical outputs)
+  scatter.png         — predicted vs actual scatter      (numerical outputs)
+  image_grid.png      — real (top) vs generated (bottom) (image outputs)
 
 Usage examples
 --------------
-  python evaluation.py --ckpt results/mlp/checkpoints/epoch_0200.pt \\
-                       --data /path/to/processed --out eval/mlp
+  python evaluation.py \\
+      --inference_dir inference/mlp \\
+      --data data/processed/test \\
+      --out eval/mlp
 
-  python evaluation.py --ckpt results/mmcgan/checkpoints/epoch_0400.pt \\
-                       --data /path/to/processed --out eval/mmcgan
-
-  # Headless / no matplotlib:
-  python evaluation.py --ckpt results/cgan/checkpoints/epoch_0300.pt \\
-                       --data /path/to/processed --out eval/cgan --no_plots
+  python evaluation.py \\
+      --inference_dir inference/mmcgan \\
+      --data data/processed/test \\
+      --out eval/mmcgan \\
+      --pad_images --no_plots
 """
 
 import argparse
@@ -33,17 +32,14 @@ import csv
 import json
 import math
 import os
-import pickle
+import sys
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from torch.utils.data import DataLoader
 
-from datasets import ABMDataset, MinMaxScaler, ImageTransform
-from models import build_model, IMAGE_GENERATION_MODELS, NUMERICAL_PREDICTION_MODELS
-from utils import load_checkpoint
+from datasets import ABMDataset, ImageTransform
 
 # ── Optional dependencies ─────────────────────────────────────────────────────
 try:
@@ -65,60 +61,29 @@ except ImportError:
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Evaluate a trained ABM model.",
+        description="Evaluate pre-computed inference outputs against ground truth.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("--ckpt", required=True, metavar="PATH",
-                   help="Path to checkpoint .pt file")
+    p.add_argument("--inference_dir", required=True, metavar="DIR",
+                   help="Directory written by inference.py "
+                        "(must contain predictions.npy and/or images.npy)")
     p.add_argument("--data", required=True, metavar="DIR",
-                   help="Processed data directory (inputs.npy, labels.npy, image_paths.txt)")
+                   help="Ground-truth data directory "
+                        "(inputs.npy, labels.npy, image_paths.txt)")
     p.add_argument("--out", default="eval", metavar="DIR",
                    help="Directory for evaluation outputs (default: eval)")
-    p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--n_images", type=int, default=8,
-                   help="Number of image pairs to show in the grid (default: 8)")
+                   help="Number of image pairs in the grid (default: 8)")
     p.add_argument("--image_size", type=int, default=1024,
-                   help="Image size, must match training (default: 1024)")
+                   help="Image size used at inference — needed to load real images "
+                        "for comparison (default: 1024)")
     p.add_argument("--pad_images", action="store_true",
-                   help="Zero-pad images to image_size instead of resizing (must match training)")
+                   help="Zero-pad real images to image_size instead of resizing "
+                        "(must match how inference.py was run)")
     p.add_argument("--no_plots", action="store_true",
-                   help="Skip all plot/image outputs (useful on headless servers)")
+                   help="Skip scatter.png and image_grid.png")
     return p.parse_args()
-
-
-# ── Model loading ─────────────────────────────────────────────────────────────
-
-def load_model(ckpt_path: str):
-    """Reconstruct model from checkpoint and return (model, model_name)."""
-    raw  = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    cfg  = dict(raw.get("config", {}))
-    name = cfg.pop("model_name", "mlp")
-    n_in = cfg.pop("n_inputs")
-    n_out= cfg.pop("n_outputs", 0)
-    model = build_model(name, n_inputs=n_in, n_outputs=n_out, **cfg)
-    model.load_state_dict(raw["model"])
-    return model, name
-
-
-# ── Scaler loading ────────────────────────────────────────────────────────────
-
-def load_scalers(ckpt_path: str):
-    """
-    Look for scalers saved by train.py one directory above the checkpoints folder.
-    E.g. results/mlp/checkpoints/epoch_0200.pt → looks in results/mlp/
-    Returns (input_scaler, label_scaler); either may be None if not found.
-    """
-    root = os.path.normpath(os.path.join(os.path.dirname(ckpt_path), ".."))
-
-    def _load(fname):
-        path = os.path.join(root, fname)
-        if os.path.isfile(path):
-            with open(path, "rb") as f:
-                return pickle.load(f)
-        return None
-
-    return _load("input_scaler.pkl"), _load("label_scaler.pkl")
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
@@ -129,11 +94,11 @@ def per_output_metrics(preds: torch.Tensor, targets: torch.Tensor,
     out = {}
     for i, name in enumerate(names):
         p, t = preds[:, i].float(), targets[:, i].float()
-        mse  = F.mse_loss(p, t).item()
-        mae  = torch.mean(torch.abs(p - t)).item()
+        mse    = F.mse_loss(p, t).item()
+        mae    = torch.mean(torch.abs(p - t)).item()
         ss_res = torch.sum((t - p) ** 2).item()
         ss_tot = torch.sum((t - t.mean()) ** 2).item()
-        r2   = 1.0 - ss_res / max(ss_tot, 1e-8)
+        r2     = 1.0 - ss_res / max(ss_tot, 1e-8)
         out[name] = {"mse": round(mse, 6), "mae": round(mae, 6), "r2": round(r2, 4)}
 
     out["mean"] = {
@@ -144,21 +109,19 @@ def per_output_metrics(preds: torch.Tensor, targets: torch.Tensor,
 
 
 def image_metrics(fakes: torch.Tensor, reals: torch.Tensor) -> dict:
-    """PSNR, L1 and optionally SSIM for (B, 3, H, W) tensors in [-1, 1]."""
+    """PSNR, L1 and optionally SSIM. Both tensors must be in [-1, 1]."""
     mse_val = F.mse_loss(fakes, reals).item()
     psnr    = 20 * math.log10(2.0 / math.sqrt(max(mse_val, 1e-10)))
     l1      = F.l1_loss(fakes, reals).item()
     out     = {"psnr": round(psnr, 4), "l1": round(l1, 6)}
 
     if HAS_SKIMAGE:
-        # Convert to [0, 1] numpy for skimage
-        f_np = ((fakes.clamp(-1, 1) + 1) / 2).numpy().transpose(0, 2, 3, 1)  # (B,H,W,3)
+        f_np = ((fakes.clamp(-1, 1) + 1) / 2).numpy().transpose(0, 2, 3, 1)
         r_np = ((reals.clamp(-1, 1) + 1) / 2).numpy().transpose(0, 2, 3, 1)
-        ssim_scores = [
+        out["ssim"] = round(float(np.mean([
             _ssim(r_np[i], f_np[i], data_range=1.0, channel_axis=-1)
             for i in range(len(f_np))
-        ]
-        out["ssim"] = round(float(np.mean(ssim_scores)), 4)
+        ])), 4)
 
     return out
 
@@ -166,13 +129,11 @@ def image_metrics(fakes: torch.Tensor, reals: torch.Tensor) -> dict:
 # ── Output helpers ────────────────────────────────────────────────────────────
 
 def save_csv(preds: torch.Tensor, targets: torch.Tensor,
-             names: list, out_dir: str):
+             names: list, out_dir: str) -> str:
     path = os.path.join(out_dir, "predictions.csv")
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(
-            [f"pred_{n}" for n in names] + [f"true_{n}" for n in names]
-        )
+        writer.writerow([f"pred_{n}" for n in names] + [f"true_{n}" for n in names])
         for p, t in zip(preds.numpy(), targets.numpy()):
             writer.writerow([*p.tolist(), *t.tolist()])
     return path
@@ -183,9 +144,8 @@ def scatter_plot(preds: np.ndarray, targets: np.ndarray,
     if not HAS_MPL:
         print("[INFO] matplotlib not available — skipping scatter.png")
         return
-    n = len(names)
     cols = 3
-    rows = math.ceil(n / cols)
+    rows = math.ceil(len(names) / cols)
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
     axes = np.array(axes).flatten()
 
@@ -210,14 +170,12 @@ def scatter_plot(preds: np.ndarray, targets: np.ndarray,
 
 
 def _to_pil(tensor: torch.Tensor) -> Image.Image:
-    """(3, H, W) tensor in [-1, 1] → PIL RGB image."""
     arr = ((tensor.clamp(-1, 1) + 1) / 2 * 255).byte().cpu().numpy()
     return Image.fromarray(arr.transpose(1, 2, 0))
 
 
 def save_image_grid(fakes: torch.Tensor, reals: torch.Tensor,
                     path: str, n: int = 8):
-    """Save a grid with real images on top and generated images on the bottom."""
     n   = min(n, len(fakes))
     row = [(_to_pil(reals[i]), _to_pil(fakes[i])) for i in range(n)]
     W, H = row[0][0].size
@@ -225,34 +183,31 @@ def save_image_grid(fakes: torch.Tensor, reals: torch.Tensor,
     for col, (real, fake) in enumerate(row):
         grid.paste(real, (col * W, 0))
         grid.paste(fake, (col * W, H))
-
-    # Add labels using PIL draw if available
     try:
         from PIL import ImageDraw
         draw = ImageDraw.Draw(grid)
-        draw.text((4, 4), "Real",      fill=(255, 255, 100))
-        draw.text((4, H + 4), "Generated", fill=(100, 255, 100))
+        draw.text((4, 4),      "Real",      fill=(255, 255, 100))
+        draw.text((4, H + 4),  "Generated", fill=(100, 255, 100))
     except Exception:
         pass
-
     grid.save(path)
 
 
-# ── Summary printing ──────────────────────────────────────────────────────────
+# ── Summary ───────────────────────────────────────────────────────────────────
 
 def print_summary(results: dict):
     print()
     print(f"{'='*56}")
-    print(f"  Model    : {results['model']}")
+    print(f"  Run      : {results['run']}")
     print(f"  Samples  : {results['n_samples']}")
     print(f"{'='*56}")
 
-    if "numerical_raw_units" in results:
+    if "numerical" in results:
         print("\n  Numerical outputs (real units):")
         print(f"  {'Output':<25} {'MSE':>12} {'MAE':>12} {'R²':>8}")
         print(f"  {'-'*60}")
-        for name, m in results["numerical_raw_units"].items():
-            tag = "  " if name != "mean" else "→ "
+        for name, m in results["numerical"].items():
+            tag = "→ " if name == "mean" else "  "
             print(f"  {tag}{name:<23} {m['mse']:>12.2f} {m['mae']:>12.2f} {m['r2']:>8.4f}")
 
     if "image" in results:
@@ -270,97 +225,84 @@ def print_summary(results: dict):
 
 def main():
     args = parse_args()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.out, exist_ok=True)
 
-    # ── Model ─────────────────────────────────────────────────────────────────
-    model, model_name = load_model(args.ckpt)
-    model.to(device).eval()
-    is_img = model_name in IMAGE_GENERATION_MODELS
-    is_num = model_name in NUMERICAL_PREDICTION_MODELS
-    print(f"Loaded  : {model_name}  from {args.ckpt}")
+    run_name = os.path.basename(os.path.normpath(args.inference_dir))
 
-    # ── Scalers ───────────────────────────────────────────────────────────────
-    input_scaler, label_scaler = load_scalers(args.ckpt)
+    # ── Discover what inference produced ──────────────────────────────────────
+    pred_path = os.path.join(args.inference_dir, "predictions.npy")
+    img_path  = os.path.join(args.inference_dir, "images.npy")
 
-    if input_scaler is None:
-        print("[WARN] input_scaler.pkl not found — fitting on eval data (approximate).")
+    has_num = os.path.isfile(pred_path)
+    has_img = os.path.isfile(img_path)
 
-    if is_num and label_scaler is None:
-        print("[WARN] label_scaler.pkl not found — fitting on eval data (approximate).")
-
-    # ── Dataset ───────────────────────────────────────────────────────────────
-    img_tf = ImageTransform(args.image_size, train=False, pad=args.pad_images) if is_img else None
-    ds = ABMDataset(args.data, load_images=is_img, image_transform=img_tf)
-
-    if input_scaler is None:
-        input_scaler = MinMaxScaler().fit(ds.raw_inputs())
-    ds.input_transform = input_scaler
-
-    if is_num:
-        if label_scaler is None:
-            label_scaler = MinMaxScaler().fit(ds.raw_labels())
-        ds.label_transform = label_scaler
-
-    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
-                        num_workers=4, pin_memory=True)
-    print(f"Dataset : {len(ds)} samples")
-
-    # ── Inference ─────────────────────────────────────────────────────────────
-    all_preds_num, all_tgts_num = [], []
-    all_fakes,     all_reals    = [], []
-
-    with torch.no_grad():
-        for batch in loader:
-            x = batch["inputs"].to(device)
-
-            if model_name == "mlp":
-                all_preds_num.append(model(x).cpu())
-                all_tgts_num.append(batch["labels"])
-
-            elif model_name in ("imreg", "cgan"):
-                all_fakes.append(model.generate(x).cpu())
-                all_reals.append(batch["image"])
-
-            elif model_name in ("mmimreg", "mmcgan"):
-                fake, pred_num = model(x)
-                all_fakes.append(fake.cpu())
-                all_reals.append(batch["image"])
-                all_preds_num.append(pred_num.cpu())
-                all_tgts_num.append(batch["labels"])
-
-    # ── Compute metrics ────────────────────────────────────────────────────────
-    results = {"model": model_name, "n_samples": len(ds)}
-
-    if all_preds_num:
-        preds_norm = torch.cat(all_preds_num)
-        tgts_norm  = torch.cat(all_tgts_num)
-
-        # Normalised-space metrics
-        results["numerical_normalised"] = per_output_metrics(
-            preds_norm, tgts_norm, ds.output_names
+    if not has_num and not has_img:
+        sys.exit(
+            f"ERROR: neither predictions.npy nor images.npy found in "
+            f"{args.inference_dir}.\nRun inference.py first."
         )
 
-        # Real-unit metrics (inverse transform both sides)
-        preds_raw = label_scaler.inverse_transform(preds_norm)
-        tgts_raw  = label_scaler.inverse_transform(tgts_norm)
-        results["numerical_raw_units"] = per_output_metrics(
-            preds_raw, tgts_raw, ds.output_names
+    print(f"Run          : {run_name}")
+    print(f"Inference dir: {args.inference_dir}")
+    print(f"Data dir     : {args.data}")
+    if has_num:
+        print(f"Found        : predictions.npy")
+    if has_img:
+        print(f"Found        : images.npy")
+
+    results = {"run": run_name}
+
+    # ── Numerical evaluation ──────────────────────────────────────────────────
+    if has_num:
+        # Inference already outputs real units — compare directly to raw labels
+        preds_real  = torch.tensor(np.load(pred_path), dtype=torch.float32)
+        labels_raw  = torch.tensor(
+            np.load(os.path.join(args.data, "labels.npy")), dtype=torch.float32
         )
 
-        csv_path = save_csv(preds_raw, tgts_raw, ds.output_names, args.out)
+        if preds_real.shape[0] != labels_raw.shape[0]:
+            sys.exit(
+                f"ERROR: predictions.npy has {preds_real.shape[0]} rows but "
+                f"labels.npy has {labels_raw.shape[0]} rows."
+            )
+
+        # Output names from the dataset (no images needed)
+        ds_meta = ABMDataset(args.data, load_images=False)
+        names   = ds_meta.output_names
+        n_samples = preds_real.shape[0]
+
+        results["n_samples"] = n_samples
+        results["numerical"] = per_output_metrics(preds_real, labels_raw, names)
+
+        csv_path = save_csv(preds_real, labels_raw, names, args.out)
         print(f"Saved   : {csv_path}")
 
         if not args.no_plots:
             scat_path = os.path.join(args.out, "scatter.png")
-            scatter_plot(preds_raw.numpy(), tgts_raw.numpy(),
-                         ds.output_names, scat_path)
+            scatter_plot(preds_real.numpy(), labels_raw.numpy(), names, scat_path)
             if HAS_MPL:
                 print(f"Saved   : {scat_path}")
 
-    if all_fakes:
-        fakes = torch.cat(all_fakes)
-        reals = torch.cat(all_reals)
+    # ── Image evaluation ──────────────────────────────────────────────────────
+    if has_img:
+        # Generated images saved by inference.py as uint8 (0–255), shape (N,3,H,W)
+        fakes_u8 = np.load(img_path)
+        fakes    = torch.tensor(fakes_u8, dtype=torch.float32) / 127.5 - 1.0
+
+        # Load matching real images via the dataset
+        img_tf = ImageTransform(args.image_size, train=False, pad=args.pad_images)
+        ds_img = ABMDataset(args.data, load_images=True, image_transform=img_tf)
+
+        if len(ds_img) != fakes.shape[0]:
+            print(
+                f"[WARN] images.npy has {fakes.shape[0]} frames but dataset has "
+                f"{len(ds_img)} images — truncating to the smaller count."
+            )
+        n = min(len(ds_img), fakes.shape[0])
+        fakes = fakes[:n]
+        reals = torch.stack([ds_img[i]["image"] for i in range(n)])
+
+        results.setdefault("n_samples", n)
         results["image"] = image_metrics(fakes, reals)
 
         if not args.no_plots:

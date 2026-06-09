@@ -2,15 +2,16 @@
 #SBATCH --job-name=abm_eval
 #SBATCH --output=logs/eval_%A_%a.out
 #SBATCH --error=logs/eval_%A_%a.err
-#SBATCH --time=4:00:00
+#SBATCH --time=2:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
-#SBATCH --array=0-4        # 5 jobs — one per model
+#SBATCH --partition=cpu        # no GPU needed — model is not reloaded
+#SBATCH --array=0-4            # 5 jobs — one per model
 
 # ── Usage ─────────────────────────────────────────────────────────────────────
+# Must be run after infer_all_slurm.sh.
+#
 # Submit all 5 models in parallel:
 #   sbatch scripts/eval_all_slurm.sh
 #
@@ -28,12 +29,12 @@ set -euo pipefail
 
 # ── Paths (edit before submitting) ────────────────────────────────────────────
 DATA="/path/to/processed"
-RESULTS_ROOT="results"
+INFER_ROOT="inference"       # where infer_all_slurm.sh wrote its outputs
 EVAL_ROOT="eval"
-SPLIT="test"             # sub-directory to evaluate: train | val | test
+SPLIT="test"                 # sub-directory to evaluate: train | val | test
 CONDA_ENV="abm"
-NO_PLOTS=1               # 1 = headless (no matplotlib), 0 = save plots
-N_IMAGES=8               # number of image pairs in grid
+NO_PLOTS=1                   # 1 = headless (no matplotlib), 0 = save plots
+N_IMAGES=8                   # number of image pairs in grid
 
 # ── Environment ───────────────────────────────────────────────────────────────
 module purge
@@ -48,18 +49,17 @@ mkdir -p logs
 echo "Host : $(hostname)"
 echo "Date : $(date)"
 echo "SLURM_ARRAY_TASK_ID : ${SLURM_ARRAY_TASK_ID}"
-nvidia-smi 2>/dev/null || true
 
 # ── Model registry ────────────────────────────────────────────────────────────
 MODELS=(mlp imreg cgan mmimreg mmcgan)
 MODEL="${MODELS[${SLURM_ARRAY_TASK_ID}]}"
 
 # ── Resolve paths ─────────────────────────────────────────────────────────────
-CKPT_DIR="${RESULTS_ROOT}/${MODEL}/checkpoints"
-CKPT="$(ls -1 "${CKPT_DIR}"/*.pt 2>/dev/null | sort | tail -1)"
+INFER_DIR="${INFER_ROOT}/${MODEL}"
 
-if [ -z "${CKPT}" ]; then
-    echo "[ERROR] No checkpoint found in ${CKPT_DIR}"
+if [ ! -d "${INFER_DIR}" ]; then
+    echo "[ERROR] Inference directory not found: ${INFER_DIR}"
+    echo "        Run infer_all_slurm.sh before eval_all_slurm.sh."
     exit 1
 fi
 
@@ -73,7 +73,7 @@ OUT="${EVAL_ROOT}/${MODEL}"
 mkdir -p "${OUT}"
 
 echo "Model      : ${MODEL}"
-echo "Checkpoint : ${CKPT}"
+echo "Inference  : ${INFER_DIR}"
 echo "Data       : ${DATA_PATH}"
 echo "Output     : ${OUT}"
 
@@ -81,13 +81,13 @@ echo "Output     : ${OUT}"
 EXTRA_FLAGS=""
 [ "${NO_PLOTS}" = "1" ] && EXTRA_FLAGS="--no_plots"
 
-python evaluation.py    \
-    --ckpt       "${CKPT}"      \
-    --data       "${DATA_PATH}" \
-    --out        "${OUT}"       \
-    --batch_size 64             \
-    --image_size 256            \
-    --n_images   "${N_IMAGES}"  \
+python evaluation.py        \
+    --inference_dir "${INFER_DIR}"  \
+    --data          "${DATA_PATH}"  \
+    --out           "${OUT}"        \
+    --image_size    1024            \
+    --pad_images                    \
+    --n_images      "${N_IMAGES}"   \
     ${EXTRA_FLAGS}
 
 echo "Finished: $(date)"

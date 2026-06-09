@@ -1,11 +1,11 @@
 #!/bin/bash
-# Run evaluation for all 5 ABM models sequentially on a single machine.
-# Uses the latest checkpoint found in each model's results directory.
+# Evaluate all 5 ABM models sequentially using pre-computed inference outputs.
+# Must be run after infer_all.sh.
 #
 # Usage
 # -----
 #   bash scripts/eval_all.sh
-#   DATA=/my/processed RESULTS_ROOT=/my/results bash scripts/eval_all.sh
+#   DATA=/my/processed INFER_ROOT=/my/inference bash scripts/eval_all.sh
 #   SPLIT=val MODELS="mlp mmimreg" bash scripts/eval_all.sh
 #   NO_PLOTS=1 bash scripts/eval_all.sh     # headless / no matplotlib
 #
@@ -20,7 +20,7 @@ set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 DATA="${DATA:-/path/to/processed}"    # directory produced by pipeline.py
-RESULTS_ROOT="${RESULTS_ROOT:-results}"
+INFER_ROOT="${INFER_ROOT:-inference}" # where infer_all.sh wrote its outputs
 EVAL_ROOT="${EVAL_ROOT:-eval}"
 SPLIT="${SPLIT:-test}"                # sub-directory to evaluate: train | val | test
 CONDA_ENV="${CONDA_ENV:-abm}"
@@ -46,29 +46,22 @@ fi
 
 echo "========================================================"
 echo "  ABM — evaluate all models"
-echo "  DATA     : ${DATA_PATH}"
-echo "  RESULTS  : ${RESULTS_ROOT}"
-echo "  OUTPUT   : ${EVAL_ROOT}"
-echo "  MODELS   : ${MODELS}"
-echo "  Host     : $(hostname)"
-echo "  Date     : $(date)"
+echo "  DATA      : ${DATA_PATH}"
+echo "  INFERENCE : ${INFER_ROOT}"
+echo "  OUTPUT    : ${EVAL_ROOT}"
+echo "  MODELS    : ${MODELS}"
+echo "  Host      : $(hostname)"
+echo "  Date      : $(date)"
 echo "========================================================"
-
-# ── Helper: find latest checkpoint ───────────────────────────────────────────
-latest_ckpt() {
-    local ckpt_dir="${RESULTS_ROOT}/${1}/checkpoints"
-    [ -d "${ckpt_dir}" ] || { echo ""; return; }
-    ls -1 "${ckpt_dir}"/*.pt 2>/dev/null | sort | tail -1
-}
 
 # ── Helper: run evaluation for one model ──────────────────────────────────────
 run_eval() {
     local model="$1"
-    local ckpt
-    ckpt="$(latest_ckpt "${model}")"
+    local infer_dir="${INFER_ROOT}/${model}"
 
-    if [ -z "${ckpt}" ]; then
-        echo "[SKIP] ${model} — no checkpoint found in ${RESULTS_ROOT}/${model}/checkpoints/"
+    if [ ! -d "${infer_dir}" ]; then
+        echo "[SKIP] ${model} — inference directory not found: ${infer_dir}"
+        echo "       Run infer_all.sh first."
         return
     fi
 
@@ -78,22 +71,22 @@ run_eval() {
     echo ""
     echo "──────────────────────────────────────────────────────"
     echo "  Evaluate : ${model}"
-    echo "  Checkpoint: ${ckpt}"
-    echo "  Output    : ${out}"
-    echo "  Start     : $(date)"
+    echo "  Inference: ${infer_dir}"
+    echo "  Output   : ${out}"
+    echo "  Start    : $(date)"
     echo "──────────────────────────────────────────────────────"
 
     local extra_flags=""
     [ "${NO_PLOTS}" = "1" ] && extra_flags="--no_plots"
 
     python evaluation.py \
-        --ckpt       "${ckpt}"      \
-        --data       "${DATA_PATH}" \
-        --out        "${out}"       \
-        --batch_size 64             \
-        --image_size 256            \
-        --n_images   "${N_IMAGES}"  \
-        ${extra_flags}              \
+        --inference_dir "${infer_dir}"  \
+        --data          "${DATA_PATH}"  \
+        --out           "${out}"        \
+        --image_size    1024            \
+        --pad_images                    \
+        --n_images      "${N_IMAGES}"   \
+        ${extra_flags}                  \
         2>&1 | tee "${out}/eval.log"
 
     echo "  Done: $(date)"
