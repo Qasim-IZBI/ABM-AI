@@ -80,12 +80,25 @@ echo "Output     : ${OUT}"
 EXTRA_FLAGS=""
 [ "${SAVE_IMAGES}" = "1" ] && EXTRA_FLAGS="--save_images"
 
+# Batch size and image args vary by model to avoid GPU OOM at 1024×1024
+case "${MODEL}" in
+    mlp)
+        BATCH_ARGS="--batch_size 128"
+        ;;
+    imreg|mmimreg)
+        BATCH_ARGS="--batch_size 16 --image_size 1024 --pad_images"
+        ;;
+    cgan|mmcgan)
+        BATCH_ARGS="--batch_size 8 --image_size 1024 --pad_images"
+        ;;
+esac
+
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 python inference.py     \
     --ckpt       "${CKPT}"      \
     --data       "${DATA_PATH}" \
     --out        "${OUT}"       \
-    --batch_size 128            \
-    --image_size 256            \
+    ${BATCH_ARGS}               \
     ${EXTRA_FLAGS}
 
 echo "Finished: $(date)"

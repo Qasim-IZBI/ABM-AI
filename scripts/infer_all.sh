@@ -87,12 +87,26 @@ run_infer() {
     local extra_flags=""
     [ "${SAVE_IMAGES}" = "1" ] && extra_flags="--save_images"
 
+    # Batch size and image args vary by model to avoid GPU OOM at 1024×1024
+    local batch_args
+    case "${model}" in
+        mlp)
+            batch_args="--batch_size 128"
+            ;;
+        imreg|mmimreg)
+            batch_args="--batch_size 16 --image_size 1024 --pad_images"
+            ;;
+        cgan|mmcgan)
+            batch_args="--batch_size 8 --image_size 1024 --pad_images"
+            ;;
+    esac
+
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     python inference.py \
         --ckpt       "${ckpt}"      \
         --data       "${DATA_PATH}" \
         --out        "${out}"       \
-        --batch_size 128            \
-        --image_size 256            \
+        ${batch_args}               \
         ${extra_flags}              \
         2>&1 | tee "${out}/infer.log"
 

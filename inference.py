@@ -47,7 +47,8 @@ def parse_args():
                    help="Data directory (inputs.npy, labels.npy, image_paths.txt)")
     p.add_argument("--out", default="inference", metavar="DIR",
                    help="Directory to write outputs (default: inference)")
-    p.add_argument("--batch_size", type=int, default=128)
+    p.add_argument("--batch_size", type=int, default=16,
+                   help="Batch size (default: 16 — use 128 for mlp, 8 for GAN models at 1024px)")
     p.add_argument("--image_size", type=int, default=1024,
                    help="Image size, must match training (default: 1024)")
     p.add_argument("--pad_images", action="store_true",
