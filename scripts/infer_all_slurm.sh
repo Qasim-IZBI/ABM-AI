@@ -32,7 +32,7 @@ RESULTS_ROOT="results"
 INFER_ROOT="inference"
 SPLIT="test"             # sub-directory to run on: train | val | test
 CONDA_ENV="abm"
-SAVE_IMAGES=0            # set to 1 to write individual PNGs
+NO_PNG=0                 # set to 1 to skip individual PNG files
 
 # ── Environment ───────────────────────────────────────────────────────────────
 module purge
@@ -78,7 +78,7 @@ echo "Output     : ${OUT}"
 
 # ── Run inference ─────────────────────────────────────────────────────────────
 EXTRA_FLAGS=""
-[ "${SAVE_IMAGES}" = "1" ] && EXTRA_FLAGS="--save_images"
+[ "${NO_PNG}" = "1" ] && EXTRA_FLAGS="--no_png"
 
 # Batch size and image args vary by model to avoid GPU OOM at 1024×1024
 case "${MODEL}" in

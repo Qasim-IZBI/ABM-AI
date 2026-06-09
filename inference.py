@@ -53,8 +53,8 @@ def parse_args():
                    help="Image size, must match training (default: 1024)")
     p.add_argument("--pad_images", action="store_true",
                    help="Zero-pad images to image_size instead of resizing (must match training)")
-    p.add_argument("--save_images", action="store_true",
-                   help="Save each generated image as an individual PNG")
+    p.add_argument("--no_png", action="store_true",
+                   help="Skip saving individual PNG files (images.npy is always saved)")
     return p.parse_args()
 
 
@@ -135,13 +135,14 @@ def main():
     all_images    = []
 
     img_dir = os.path.join(args.out, "images")
-    if is_img and args.save_images:
+    if is_img and not args.no_png:
         os.makedirs(img_dir, exist_ok=True)
 
-    sample_idx = 0
+    processed_idx = 0   # position into ds._indices
     with torch.no_grad():
         for batch in loader:
-            x = batch["inputs"].to(device)
+            x   = batch["inputs"].to(device)
+            bsz = x.size(0)
 
             if model_name == "mlp":
                 all_num_preds.append(model(x).cpu())
@@ -155,11 +156,19 @@ def main():
                 all_images.append(fake.cpu())
                 all_num_preds.append(pred_num.cpu())
 
-            # Optionally write individual PNGs
-            if is_img and args.save_images:
-                for img_tensor in all_images[-1]:
-                    save_png(img_tensor, os.path.join(img_dir, f"{sample_idx:05d}.png"))
-                    sample_idx += 1
+            # Save individual PNGs named after the original image file
+            if is_img and not args.no_png:
+                for k, img_tensor in enumerate(all_images[-1]):
+                    orig_idx  = ds._indices[processed_idx + k]
+                    orig_path = ds._image_paths[orig_idx]
+                    if orig_path != "MISSING":
+                        png_name = os.path.basename(orig_path)   # e.g. B5_T2_1_2_rayimg000001.png
+                    else:
+                        png_name = f"{orig_idx:05d}.png"
+                    save_png(img_tensor, os.path.join(img_dir, png_name))
+
+            if is_img:
+                processed_idx += bsz
 
     # ── Save numerical predictions (denormalised to real units) ───────────────
     if all_num_preds:
@@ -187,7 +196,7 @@ def main():
         img_npy = os.path.join(args.out, "images.npy")
         np.save(img_npy, ((images.clamp(-1, 1) + 1) / 2 * 255).byte().numpy())
         print(f"Saved   : {img_npy}  shape={images.shape}")
-        if args.save_images:
+        if not args.no_png:
             print(f"Saved   : {img_dir}/  ({len(images)} PNGs)")
 
 

@@ -24,7 +24,7 @@ INFER_ROOT="${INFER_ROOT:-inference}"
 SPLIT="${SPLIT:-test}"                # sub-directory to run on: train | val | test
 CONDA_ENV="${CONDA_ENV:-abm}"
 MODELS="${MODELS:-mlp imreg cgan mmimreg mmcgan}"
-SAVE_IMAGES="${SAVE_IMAGES:-0}"       # set to 1 to write individual PNGs
+NO_PNG="${NO_PNG:-0}"                 # set to 1 to skip individual PNG files
 
 # ── Activate environment ──────────────────────────────────────────────────────
 if [ -n "${CONDA_ENV}" ]; then
@@ -85,7 +85,7 @@ run_infer() {
     echo "──────────────────────────────────────────────────────"
 
     local extra_flags=""
-    [ "${SAVE_IMAGES}" = "1" ] && extra_flags="--save_images"
+    [ "${NO_PNG}" = "1" ] && extra_flags="--no_png"
 
     # Batch size and image args vary by model to avoid GPU OOM at 1024×1024
     local batch_args
