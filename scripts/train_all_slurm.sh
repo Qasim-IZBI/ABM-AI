@@ -39,7 +39,9 @@ module load Anaconda3 2>/dev/null || true
 eval "$(conda shell.bash hook)"
 conda activate "${CONDA_ENV}"
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# SLURM copies the script to its spool dir, so $0 resolves there, not here.
+# SLURM_SUBMIT_DIR is set to the directory where sbatch was called from.
+REPO_ROOT="${SLURM_SUBMIT_DIR}"
 cd "${REPO_ROOT}"
 mkdir -p logs
 

@@ -41,7 +41,7 @@ module load Anaconda3 2>/dev/null || true
 eval "$(conda shell.bash hook)"
 conda activate "${CONDA_ENV}"
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="${SLURM_SUBMIT_DIR}"
 cd "${REPO_ROOT}"
 mkdir -p logs
 
